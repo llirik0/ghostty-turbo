@@ -318,10 +318,8 @@ impl GhosttyShellApp {
                                 ))
                                 .corner_radius(CornerRadius::same(999.min(u8::MAX as i32) as u8));
 
-                        if ui.add(button).clicked() {
-                            if self.themes.set_active_by_slug(&entry.slug) {
-                                configure_theme(ui.ctx(), &self.active_theme().palette);
-                            }
+                        if ui.add(button).clicked() && self.themes.set_active_by_slug(&entry.slug) {
+                            configure_theme(ui.ctx(), &self.active_theme().palette);
                         }
                     }
 
