@@ -26,6 +26,14 @@ cargo run
 
 Launch the app from inside the repo you want it to track.
 
+## Test
+
+```bash
+cargo test
+```
+
+The suite covers the git snapshot parser, real temp-repo state collection, preview handling, and usage-event aggregation.
+
 ## Usage Events
 
 The right rail watches `.ghostty-shell/usage-events.jsonl` by default. You can override it with `GHOSTTY_SHELL_USAGE_LOG`.

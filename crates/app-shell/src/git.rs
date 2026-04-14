@@ -68,7 +68,7 @@ pub fn load_snapshot(cwd: &Path) -> GitSnapshot {
             continue;
         };
 
-        let (added, removed) = collect_numstat(&repo_root, &path);
+        let (added, removed) = collect_numstat(&repo_root, &path, &status);
         let diff = collect_diff(&repo_root, &path, &status);
         let preview = read_preview(&repo_root, &path);
 
@@ -169,7 +169,7 @@ fn parse_status_line(line: &str) -> Option<(String, String)> {
     Some((status, path))
 }
 
-fn collect_numstat(repo_root: &Path, path: &str) -> (usize, usize) {
+fn collect_numstat(repo_root: &Path, path: &str, status: &str) -> (usize, usize) {
     let staged = parse_numstat(&String::from_utf8_lossy(
         &run_git(repo_root, ["diff", "--cached", "--numstat", "--", path]).stdout,
     ));
@@ -177,7 +177,19 @@ fn collect_numstat(repo_root: &Path, path: &str) -> (usize, usize) {
         &run_git(repo_root, ["diff", "--numstat", "--", path]).stdout,
     ));
 
-    (staged.0 + unstaged.0, staged.1 + unstaged.1)
+    let total = (staged.0 + unstaged.0, staged.1 + unstaged.1);
+    if total != (0, 0) || !status.contains('?') {
+        return total;
+    }
+
+    parse_numstat(&String::from_utf8_lossy(
+        &Command::new("git")
+            .args(["diff", "--no-index", "--numstat", "--", "/dev/null", path])
+            .current_dir(repo_root)
+            .output()
+            .map(|output| output.stdout)
+            .unwrap_or_default(),
+    ))
 }
 
 fn parse_numstat(output: &str) -> (usize, usize) {
@@ -265,5 +277,151 @@ fn stderr_or_fallback(stderr: &[u8], fallback: &str) -> String {
         fallback.into()
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::TempDir;
+
+    #[test]
+    fn parse_branch_line_reads_ahead_and_behind_counts() {
+        let mut snapshot = GitSnapshot::default();
+
+        parse_branch_line("## main...origin/main [ahead 2, behind 1]", &mut snapshot);
+
+        assert_eq!(snapshot.branch, "main");
+        assert_eq!(snapshot.ahead, 2);
+        assert_eq!(snapshot.behind, 1);
+    }
+
+    #[test]
+    fn parse_branch_line_handles_detached_head() {
+        let mut snapshot = GitSnapshot::default();
+
+        parse_branch_line("## HEAD (no branch)", &mut snapshot);
+
+        assert_eq!(snapshot.branch, "detached");
+    }
+
+    #[test]
+    fn parse_status_line_handles_rename_and_untracked() {
+        assert_eq!(
+            parse_status_line("R  old/path.txt -> new/path.txt"),
+            Some(("R".into(), "new/path.txt".into()))
+        );
+        assert_eq!(
+            parse_status_line("?? \"new file.txt\""),
+            Some(("??".into(), "new file.txt".into()))
+        );
+    }
+
+    #[test]
+    fn parse_numstat_ignores_binary_markers() {
+        let output = "12\t4\tsrc/app.rs\n-\t-\tassets/icon.png\n";
+
+        assert_eq!(parse_numstat(output), (12, 4));
+    }
+
+    #[test]
+    fn read_preview_suppresses_binary_and_truncates_large_files() {
+        let temp = TempDir::new().expect("temp dir");
+        fs::write(temp.path().join("image.bin"), [0, 159, 146, 150]).expect("binary file");
+        fs::write(temp.path().join("huge.txt"), "x".repeat(40_100)).expect("huge file");
+
+        assert_eq!(
+            read_preview(temp.path(), "image.bin"),
+            "Binary or non-text file preview suppressed."
+        );
+
+        let preview = read_preview(temp.path(), "huge.txt");
+        assert!(preview.ends_with("... preview truncated ..."));
+        assert!(preview.len() < 40_100);
+    }
+
+    #[test]
+    fn load_snapshot_reads_real_repository_state() {
+        let temp = init_git_repo();
+        let tracked_path = temp.path().join("tracked.txt");
+        fs::write(&tracked_path, "alpha\nbeta\n").expect("tracked file");
+        git(temp.path(), &["add", "tracked.txt"]);
+        git(temp.path(), &["commit", "-m", "initial"]);
+
+        fs::write(&tracked_path, "alpha\nbeta\ncharlie\n").expect("modified tracked file");
+        fs::write(temp.path().join("notes.md"), "# scratch\n").expect("untracked file");
+
+        let snapshot = load_snapshot(temp.path());
+
+        assert_eq!(
+            snapshot.repo_name,
+            temp.path().file_name().unwrap().to_string_lossy()
+        );
+        assert_eq!(snapshot.branch, "main");
+        assert!(
+            snapshot
+                .changes
+                .iter()
+                .any(|change| change.path == "tracked.txt")
+        );
+        assert!(
+            snapshot
+                .changes
+                .iter()
+                .any(|change| change.path == "notes.md")
+        );
+        assert_eq!(snapshot.total_added, 2);
+        assert_eq!(snapshot.total_removed, 0);
+
+        let tracked = snapshot
+            .changes
+            .iter()
+            .find(|change| change.path == "tracked.txt")
+            .expect("tracked change");
+        assert!(tracked.diff.contains("charlie"));
+        assert!(tracked.preview.contains("charlie"));
+
+        let untracked = snapshot
+            .changes
+            .iter()
+            .find(|change| change.path == "notes.md")
+            .expect("untracked change");
+        assert!(untracked.status.contains('?'));
+        assert!(untracked.diff.contains("scratch"));
+    }
+
+    #[test]
+    fn load_snapshot_reports_non_repo_error() {
+        let temp = TempDir::new().expect("temp dir");
+
+        let snapshot = load_snapshot(temp.path());
+
+        assert_eq!(
+            snapshot.error.as_deref(),
+            Some("Not inside a git repository.")
+        );
+        assert!(snapshot.repo_root.is_none());
+    }
+
+    fn init_git_repo() -> TempDir {
+        let temp = TempDir::new().expect("temp dir");
+        git(temp.path(), &["init", "-b", "main"]);
+        git(temp.path(), &["config", "user.name", "Test Runner"]);
+        git(temp.path(), &["config", "user.email", "tests@example.com"]);
+        temp
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .unwrap_or_else(|error| panic!("git {:?} failed to start: {error}", args));
+
+        if !output.status.success() {
+            let _ = std::io::stderr().write_all(&output.stderr);
+            panic!("git {:?} failed", args);
+        }
     }
 }

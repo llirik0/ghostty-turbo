@@ -44,13 +44,17 @@ pub enum UsageStatus {
 
 pub fn load_snapshot(root_hint: &Path) -> UsageSnapshot {
     let source_path = usage_log_path(root_hint);
+    load_snapshot_from_path(&source_path)
+}
+
+fn load_snapshot_from_path(source_path: &Path) -> UsageSnapshot {
     let mut snapshot = UsageSnapshot {
-        source_path: source_path.clone(),
+        source_path: source_path.to_path_buf(),
         status: UsageStatus::AwaitingFile,
         ..Default::default()
     };
 
-    let contents = match fs::read_to_string(&source_path) {
+    let contents = match fs::read_to_string(source_path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == ErrorKind::NotFound => return snapshot,
         Err(error) => {
@@ -60,6 +64,10 @@ pub fn load_snapshot(root_hint: &Path) -> UsageSnapshot {
         }
     };
 
+    parse_snapshot_contents(snapshot, &contents)
+}
+
+fn parse_snapshot_contents(mut snapshot: UsageSnapshot, contents: &str) -> UsageSnapshot {
     if contents.lines().all(|line| line.trim().is_empty()) {
         snapshot.status = UsageStatus::AwaitingEvents;
         return snapshot;
@@ -172,4 +180,99 @@ fn float_field(value: &Value, keys: &[&str]) -> f64 {
                 .or_else(|| field.as_i64().map(|number| number as f64))
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn parse_snapshot_contents_aggregates_usage_by_model() {
+        let snapshot = parse_snapshot_contents(
+            UsageSnapshot {
+                source_path: PathBuf::from("usage.jsonl"),
+                ..Default::default()
+            },
+            r#"{"timestamp":"2026-04-14T15:10:00Z","provider":"OpenAI","model":"gpt-5.4","input_tokens":1200,"output_tokens":340,"cost_usd":0.09,"session":"shell-01"}
+{"timestamp":"2026-04-14T15:12:00Z","vendor":"OpenAI","model_name":"gpt-5.4","prompt_tokens":300,"completion_tokens":30,"cost":0.02,"session_id":"shell-01"}
+{"timestamp":"2026-04-14T15:13:00Z","provider":"Anthropic","model":"claude-sonnet","input_tokens":980,"output_tokens":210,"cost_usd":0.05,"session":"shell-02"}"#,
+        );
+
+        assert_eq!(snapshot.status, UsageStatus::Ready);
+        assert_eq!(snapshot.total_input_tokens, 2_480);
+        assert_eq!(snapshot.total_output_tokens, 580);
+        assert!((snapshot.total_cost_usd - 0.16).abs() < f64::EPSILON);
+        assert_eq!(snapshot.event_count, 3);
+        assert_eq!(snapshot.session_count, 2);
+        assert_eq!(
+            snapshot.last_timestamp.as_deref(),
+            Some("2026-04-14T15:13:00Z")
+        );
+        assert_eq!(snapshot.models.len(), 2);
+        assert_eq!(snapshot.models[0].provider, "OpenAI");
+        assert_eq!(snapshot.models[0].model, "gpt-5.4");
+        assert_eq!(snapshot.models[0].input_tokens, 1_500);
+        assert_eq!(snapshot.models[0].output_tokens, 370);
+        assert_eq!(snapshot.models[0].event_count, 2);
+    }
+
+    #[test]
+    fn parse_snapshot_contents_reports_partial_parse_failures() {
+        let snapshot = parse_snapshot_contents(
+            UsageSnapshot {
+                source_path: PathBuf::from("usage.jsonl"),
+                ..Default::default()
+            },
+            r#"{"provider":"OpenAI","model":"gpt-5.4","input_tokens":10,"output_tokens":5,"cost_usd":0.01}
+not json at all"#,
+        );
+
+        assert_eq!(snapshot.status, UsageStatus::ParseWarning);
+        assert_eq!(snapshot.parse_errors, 1);
+        assert_eq!(snapshot.event_count, 1);
+        assert_eq!(snapshot.models.len(), 1);
+    }
+
+    #[test]
+    fn parse_snapshot_contents_reports_error_when_all_lines_are_broken() {
+        let snapshot = parse_snapshot_contents(
+            UsageSnapshot {
+                source_path: PathBuf::from("usage.jsonl"),
+                ..Default::default()
+            },
+            "}{\nnot-json\n",
+        );
+
+        assert_eq!(snapshot.status, UsageStatus::Error);
+        assert_eq!(snapshot.parse_errors, 2);
+        assert_eq!(snapshot.event_count, 0);
+        assert!(snapshot.models.is_empty());
+    }
+
+    #[test]
+    fn load_snapshot_from_path_handles_missing_and_empty_files() {
+        let temp = TempDir::new().expect("temp dir");
+        let missing = temp.path().join("missing.jsonl");
+        let empty = temp.path().join("empty.jsonl");
+        fs::write(&empty, "\n  \n").expect("empty usage log");
+
+        let missing_snapshot = load_snapshot_from_path(&missing);
+        let empty_snapshot = load_snapshot_from_path(&empty);
+
+        assert_eq!(missing_snapshot.status, UsageStatus::AwaitingFile);
+        assert_eq!(empty_snapshot.status, UsageStatus::AwaitingEvents);
+    }
+
+    #[test]
+    fn numeric_fields_clamp_negative_and_accept_integer_costs() {
+        let value: Value = serde_json::from_str(
+            r#"{"input_tokens":-10,"output_tokens":2,"cost":3,"provider":"x","model":"y"}"#,
+        )
+        .expect("json");
+
+        assert_eq!(integer_field(&value, &["input_tokens"]), 0);
+        assert_eq!(integer_field(&value, &["output_tokens"]), 2);
+        assert_eq!(float_field(&value, &["cost"]), 3.0);
+    }
 }
