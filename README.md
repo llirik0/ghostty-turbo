@@ -1,5 +1,8 @@
 # Ghostty Shell
 
+[![CI](https://github.com/llirik0/ghostty-/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/llirik0/ghostty-/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Three-pane Rust shell around Ghostty:
 
 - Left rail: live git change navigator for the current repo
