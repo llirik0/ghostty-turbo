@@ -1,5 +1,6 @@
 mod app;
 mod git;
+mod theme;
 mod usage;
 
 fn main() -> eframe::Result {

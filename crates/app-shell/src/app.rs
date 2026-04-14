@@ -7,27 +7,30 @@ use std::{
 };
 
 use eframe::egui::{
-    self, Align, CentralPanel, Color32, Context, CornerRadius, Frame, Layout, Panel, RichText,
-    ScrollArea, Stroke, TextEdit,
+    self, Align, CentralPanel, Color32, Context, CornerRadius, Frame, LayerId, Layout, Order,
+    Panel, RichText, ScrollArea, Stroke, TextEdit, pos2,
 };
 
 use crate::{
     git::{self, GitChange, GitSnapshot},
+    theme::{AppTheme, ThemeCatalog, ThemePalette},
     usage::{self, UsageSnapshot, UsageStatus},
 };
 
 pub struct GhosttyShellApp {
     center_mode: CenterMode,
     selected_path: Option<String>,
+    themes: ThemeCatalog,
     workspace: WorkspaceSnapshot,
     workspace_rx: Receiver<WorkspaceSnapshot>,
 }
 
 impl GhosttyShellApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        configure_theme(&cc.egui_ctx);
-
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let themes = ThemeCatalog::load(&cwd);
+        configure_theme(&cc.egui_ctx, &themes.active().palette);
+
         let workspace = WorkspaceSnapshot::load(&cwd);
         let selected_path = workspace
             .git
@@ -38,9 +41,14 @@ impl GhosttyShellApp {
         Self {
             center_mode: CenterMode::Terminal,
             selected_path,
+            themes,
             workspace_rx: spawn_workspace_worker(cwd),
             workspace,
         }
+    }
+
+    fn active_theme(&self) -> &AppTheme {
+        self.themes.active()
     }
 
     fn drain_updates(&mut self) {
@@ -84,15 +92,18 @@ impl GhosttyShellApp {
     }
 
     fn left_panel(&mut self, ui: &mut egui::Ui) {
+        let theme = self.active_theme().palette.clone();
+
         Panel::left("repo_changes")
             .resizable(true)
-            .default_size(270.0)
-            .min_size(230.0)
+            .default_size(290.0)
+            .min_size(240.0)
             .show_inside(ui, |ui| {
-                shell_panel(ui, "Changed Files", |ui| {
+                shell_panel(ui, "Changed Files", &theme, |ui| {
                     if self.workspace.git.repo_root.is_none() {
                         empty_state(
                             ui,
+                            &theme,
                             "No repo detected",
                             "Launch the shell from inside a git repo and the left rail stops being decorative.",
                         );
@@ -100,8 +111,8 @@ impl GhosttyShellApp {
                     }
 
                     ui.horizontal_wrapped(|ui| {
-                        tag(ui, "Repo", &self.workspace.git.repo_name);
-                        tag(ui, "Branch", &branch_label(&self.workspace.git));
+                        tag(ui, &theme, "Repo", &self.workspace.git.repo_name);
+                        tag(ui, &theme, "Branch", &branch_label(&self.workspace.git));
                     });
                     ui.add_space(8.0);
                     ui.label(
@@ -111,7 +122,7 @@ impl GhosttyShellApp {
                             self.workspace.git.total_added,
                             self.workspace.git.total_removed
                         ))
-                        .color(ink_muted()),
+                        .color(theme.muted_text()),
                     );
                     ui.add_space(10.0);
 
@@ -130,13 +141,17 @@ impl GhosttyShellApp {
                                 )
                                 .selected(selected)
                                 .fill(if selected {
-                                    Color32::from_rgb(234, 226, 216)
+                                    theme.selected_fill()
                                 } else {
-                                    status_fill(&change.status)
+                                    theme.status_fill(&change.status)
                                 })
                                 .stroke(Stroke::new(
                                     1.0,
-                                    if selected { ink() } else { border() },
+                                    if selected {
+                                        theme.strong_border()
+                                    } else {
+                                        theme.border()
+                                    },
                                 ))
                                 .corner_radius(CornerRadius::same(10));
 
@@ -152,14 +167,42 @@ impl GhosttyShellApp {
     }
 
     fn right_panel(&self, ui: &mut egui::Ui) {
+        let theme = &self.active_theme().palette;
+        let active_theme = self.active_theme();
+
         Panel::right("usage_panel")
             .resizable(true)
-            .default_size(320.0)
-            .min_size(280.0)
+            .default_size(340.0)
+            .min_size(300.0)
             .show_inside(ui, |ui| {
-                shell_panel(ui, "Context + Model Usage", |ui| {
+                shell_panel(ui, "Context + Model Usage", theme, |ui| {
                     stat_card(
                         ui,
+                        theme,
+                        "Theme Pack",
+                        &active_theme.name,
+                        &format!(
+                            "{} / {} / {} extras",
+                            active_theme
+                                .preview
+                                .as_deref()
+                                .and_then(|path| path.file_name())
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("no preview"),
+                            active_theme.integrations.len(),
+                            active_theme
+                                .background
+                                .as_deref()
+                                .and_then(|path| path.file_name())
+                                .and_then(|name| name.to_str())
+                                .unwrap_or("no background preview")
+                        ),
+                    );
+                    ui.add_space(8.0);
+
+                    stat_card(
+                        ui,
+                        theme,
                         "Tracked",
                         "Token totals",
                         &format!(
@@ -173,6 +216,7 @@ impl GhosttyShellApp {
 
                     stat_card(
                         ui,
+                        theme,
                         "Sessions",
                         "Event feed",
                         &format!(
@@ -187,6 +231,7 @@ impl GhosttyShellApp {
                             for summary in self.workspace.usage.models.iter().take(4) {
                                 stat_card(
                                     ui,
+                                    theme,
                                     &summary.provider,
                                     &summary.model,
                                     &format!(
@@ -202,16 +247,19 @@ impl GhosttyShellApp {
                         }
                         UsageStatus::AwaitingFile => empty_state(
                             ui,
+                            theme,
                             "No usage log yet",
                             "Feed JSONL events into .ghostty-shell/usage-events.jsonl or set GHOSTTY_SHELL_USAGE_LOG.",
                         ),
                         UsageStatus::AwaitingEvents => empty_state(
                             ui,
+                            theme,
                             "Usage log is empty",
                             "The pipe exists. Now give it actual model events.",
                         ),
                         UsageStatus::Error => empty_state(
                             ui,
+                            theme,
                             "Usage parsing failed",
                             self.workspace
                                 .usage
@@ -222,86 +270,141 @@ impl GhosttyShellApp {
                     }
 
                     ui.add_space(8.0);
-                    ui.label(RichText::new("Watching").size(12.0).color(ink_muted()));
+                    if let Some(directory) = &active_theme.directory {
+                        ui.label(RichText::new("Theme source").size(12.0).color(theme.muted_text()));
+                        ui.monospace(directory.display().to_string());
+                        ui.add_space(8.0);
+                    }
+
+                    ui.label(RichText::new("Watching").size(12.0).color(theme.muted_text()));
                     ui.monospace(self.workspace.usage.source_path.display().to_string());
                 });
             });
     }
 
     fn top_bar(&mut self, ui: &mut egui::Ui) {
+        let theme = self.active_theme().palette.clone();
+
         Panel::top("header")
             .resizable(false)
-            .exact_size(58.0)
+            .exact_size(64.0)
             .show_inside(ui, |ui| {
-                ui.add_space(10.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.heading(
                         RichText::new("APP SHELL")
                             .size(15.0)
                             .extra_letter_spacing(1.8)
-                            .color(ink()),
+                            .color(theme.foreground),
                     );
+                    ui.add_space(12.0);
+
+                    for entry in self.themes.themes().to_vec() {
+                        let selected = entry.slug == self.active_theme().slug;
+                        let button =
+                            egui::Button::new(RichText::new(entry.name.clone()).size(12.5))
+                                .fill(if selected {
+                                    theme.selected_fill()
+                                } else {
+                                    theme.card_bg()
+                                })
+                                .stroke(Stroke::new(
+                                    1.0,
+                                    if selected {
+                                        theme.strong_border()
+                                    } else {
+                                        theme.border()
+                                    },
+                                ))
+                                .corner_radius(CornerRadius::same(999.min(u8::MAX as i32) as u8));
+
+                        if ui.add(button).clicked() {
+                            if self.themes.set_active_by_slug(&entry.slug) {
+                                configure_theme(ui.ctx(), &self.active_theme().palette);
+                            }
+                        }
+                    }
+
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        tag(ui, "Usage", "Live JSONL");
-                        tag(ui, "Ghostty", "latest ghostty-org/ghostty");
+                        tag(ui, &theme, "Ghostty", "latest ghostty-org/ghostty");
+                        tag(ui, &theme, "Usage", "Live JSONL");
                     });
                 });
             });
     }
 
     fn bottom_bar(&self, ui: &mut egui::Ui) {
+        let theme = &self.active_theme().palette;
+
         Panel::bottom("status")
             .resizable(false)
             .exact_size(42.0)
             .show_inside(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(format!(
-                        "repo {}",
-                        non_empty(&self.workspace.git.repo_name, "none")
-                    ));
+                    ui.label(
+                        RichText::new(format!(
+                            "repo {}",
+                            non_empty(&self.workspace.git.repo_name, "none")
+                        ))
+                        .color(theme.chrome_text()),
+                    );
                     ui.separator();
-                    ui.label(format!("branch {}", branch_label(&self.workspace.git)));
+                    ui.label(
+                        RichText::new(format!("branch {}", branch_label(&self.workspace.git)))
+                            .color(theme.chrome_text()),
+                    );
                     ui.separator();
-                    ui.label(format!("cwd {}", self.workspace.cwd.display()));
+                    ui.label(
+                        RichText::new(format!("cwd {}", self.workspace.cwd.display()))
+                            .color(theme.chrome_text()),
+                    );
                     ui.separator();
-                    ui.label(format!(
-                        "file {}",
-                        self.selected_item()
-                            .map(|change| change.path.as_str())
-                            .unwrap_or("none")
-                    ));
+                    ui.label(
+                        RichText::new(format!(
+                            "file {}",
+                            self.selected_item()
+                                .map(|change| change.path.as_str())
+                                .unwrap_or("none")
+                        ))
+                        .color(theme.chrome_text()),
+                    );
                     ui.separator();
-                    ui.label(format!(
-                        "tokens {}",
-                        self.workspace.usage.total_input_tokens
-                            + self.workspace.usage.total_output_tokens
-                    ));
+                    ui.label(
+                        RichText::new(format!(
+                            "tokens {}",
+                            self.workspace.usage.total_input_tokens
+                                + self.workspace.usage.total_output_tokens
+                        ))
+                        .color(theme.chrome_text()),
+                    );
                     ui.separator();
-                    ui.label("mode");
+                    ui.label(RichText::new("mode").color(theme.chrome_text()));
                     ui.monospace(self.center_mode.title());
                 });
             });
     }
 
     fn center_panel(&mut self, ui: &mut egui::Ui) {
+        let theme = self.active_theme().palette.clone();
+
         CentralPanel::default().show_inside(ui, |ui| {
-            shell_panel(ui, "Ghostty Session / File Viewer", |ui| {
+            shell_panel(ui, "Ghostty Session / File Viewer", &theme, |ui| {
                 ui.horizontal(|ui| {
                     for mode in CenterMode::ALL {
                         let selected = self.center_mode == mode;
                         let button = egui::Button::new(RichText::new(mode.title()).size(13.5))
                             .selected(selected)
                             .fill(if selected {
-                                Color32::from_rgb(33, 32, 30)
+                                theme.selected_fill()
                             } else {
-                                paper()
+                                theme.card_bg()
                             })
                             .stroke(Stroke::new(
                                 1.0,
                                 if selected {
-                                    Color32::from_rgb(33, 32, 30)
+                                    theme.strong_border()
                                 } else {
-                                    border()
+                                    theme.border()
                                 },
                             ))
                             .corner_radius(CornerRadius::same(9));
@@ -315,17 +418,17 @@ impl GhosttyShellApp {
                 if let Some(change) = self.selected_item() {
                     ui.add_space(10.0);
                     ui.horizontal_wrapped(|ui| {
-                        tag(ui, "Focus", &change.path);
-                        tag(ui, "State", &change.status);
+                        tag(ui, &theme, "Focus", &change.path);
+                        tag(ui, &theme, "State", &change.status);
                     });
                 }
 
                 ui.add_space(12.0);
 
                 match self.center_mode {
-                    CenterMode::Terminal => terminal_surface(ui, &self.workspace.git),
-                    CenterMode::Diff => diff_surface(ui, self.selected_item()),
-                    CenterMode::Preview => preview_surface(ui, self.selected_item()),
+                    CenterMode::Terminal => terminal_surface(ui, &self.workspace.git, &theme),
+                    CenterMode::Diff => diff_surface(ui, self.selected_item(), &theme),
+                    CenterMode::Preview => preview_surface(ui, self.selected_item(), &theme),
                 }
             });
         });
@@ -336,6 +439,7 @@ impl eframe::App for GhosttyShellApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.drain_updates();
         ui.ctx().request_repaint_after(Duration::from_millis(250));
+        paint_backdrop(ui.ctx(), &self.active_theme().palette);
 
         self.top_bar(ui);
         self.left_panel(ui);
@@ -401,62 +505,87 @@ fn spawn_workspace_worker(cwd: PathBuf) -> Receiver<WorkspaceSnapshot> {
     rx
 }
 
-fn shell_panel(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui)) {
+fn shell_panel(
+    ui: &mut egui::Ui,
+    title: &str,
+    theme: &ThemePalette,
+    add_contents: impl FnOnce(&mut egui::Ui),
+) {
     Frame::default()
-        .fill(paper())
-        .stroke(Stroke::new(1.0, border()))
+        .fill(theme.panel_bg())
+        .stroke(Stroke::new(1.0, theme.border()))
         .corner_radius(CornerRadius::same(14))
         .inner_margin(16.0)
         .show(ui, |ui| {
-            ui.label(RichText::new(title).size(14.0).strong());
+            ui.label(
+                RichText::new(title)
+                    .size(14.0)
+                    .strong()
+                    .color(theme.foreground),
+            );
             ui.add_space(10.0);
             add_contents(ui);
         });
 }
 
-fn stat_card(ui: &mut egui::Ui, eyebrow: &str, title: &str, body: &str) {
+fn stat_card(ui: &mut egui::Ui, theme: &ThemePalette, eyebrow: &str, title: &str, body: &str) {
     Frame::default()
-        .fill(Color32::from_rgb(243, 238, 231))
-        .stroke(Stroke::new(1.0, border()))
+        .fill(theme.card_bg())
+        .stroke(Stroke::new(1.0, theme.border()))
         .corner_radius(CornerRadius::same(12))
         .inner_margin(12.0)
         .show(ui, |ui| {
-            ui.label(RichText::new(eyebrow).size(11.5).color(ink_muted()));
-            ui.label(RichText::new(title).size(16.0).strong());
-            ui.label(RichText::new(body).size(13.5).color(ink_muted()));
+            ui.label(RichText::new(eyebrow).size(11.5).color(theme.muted_text()));
+            ui.label(
+                RichText::new(title)
+                    .size(16.0)
+                    .strong()
+                    .color(theme.foreground),
+            );
+            ui.label(RichText::new(body).size(13.5).color(theme.muted_text()));
         });
 }
 
-fn tag(ui: &mut egui::Ui, label: &str, value: &str) {
+fn tag(ui: &mut egui::Ui, theme: &ThemePalette, label: &str, value: &str) {
     Frame::default()
-        .fill(Color32::from_rgb(243, 238, 231))
-        .stroke(Stroke::new(1.0, border()))
+        .fill(theme.elevated_bg())
+        .stroke(Stroke::new(1.0, theme.border()))
         .corner_radius(CornerRadius::same(255))
         .inner_margin(8.0)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(label).size(12.0).color(ink_muted()));
-                ui.label(RichText::new(value).size(12.0).strong());
+                ui.label(RichText::new(label).size(12.0).color(theme.muted_text()));
+                ui.label(
+                    RichText::new(value)
+                        .size(12.0)
+                        .strong()
+                        .color(theme.foreground),
+                );
             });
         });
 }
 
-fn empty_state(ui: &mut egui::Ui, title: &str, body: &str) {
+fn empty_state(ui: &mut egui::Ui, theme: &ThemePalette, title: &str, body: &str) {
     Frame::default()
-        .fill(Color32::from_rgb(243, 238, 231))
-        .stroke(Stroke::new(1.0, border()))
+        .fill(theme.card_bg())
+        .stroke(Stroke::new(1.0, theme.border()))
         .corner_radius(CornerRadius::same(12))
         .inner_margin(12.0)
         .show(ui, |ui| {
-            ui.label(RichText::new(title).size(15.0).strong());
-            ui.label(RichText::new(body).size(13.5).color(ink_muted()));
+            ui.label(
+                RichText::new(title)
+                    .size(15.0)
+                    .strong()
+                    .color(theme.foreground),
+            );
+            ui.label(RichText::new(body).size(13.5).color(theme.muted_text()));
         });
 }
 
-fn terminal_surface(ui: &mut egui::Ui, git: &GitSnapshot) {
+fn terminal_surface(ui: &mut egui::Ui, git: &GitSnapshot, theme: &ThemePalette) {
     Frame::default()
-        .fill(ink())
-        .stroke(Stroke::new(1.0, Color32::from_rgb(64, 62, 58)))
+        .fill(theme.terminal_bg())
+        .stroke(Stroke::new(1.0, theme.strong_border()))
         .corner_radius(CornerRadius::same(18))
         .inner_margin(22.0)
         .show(ui, |ui| {
@@ -467,37 +596,40 @@ fn terminal_surface(ui: &mut egui::Ui, git: &GitSnapshot) {
                     RichText::new("GHOSTTY")
                         .size(28.0)
                         .strong()
-                        .color(Color32::from_rgb(243, 238, 231)),
+                        .color(theme.selection_foreground),
                 );
                 ui.add_space(14.0);
                 ui.label(
-                    RichText::new("Shell panes are live. Ghostty surface wiring targets the latest upstream repo next.")
-                        .size(15.0)
-                        .color(Color32::from_rgb(180, 175, 169)),
+                    RichText::new(
+                        "Theme system is live. Ghostty surface wiring targets the latest upstream repo next.",
+                    )
+                    .size(15.0)
+                    .color(theme.muted_text()),
                 );
                 ui.add_space(10.0);
                 ui.label(
                     RichText::new(format!(
-                        "repo {} / branch {} / files {}",
+                        "repo {} / branch {} / files {} / theme {}",
                         non_empty(&git.repo_name, "none"),
                         branch_label(git),
-                        git.changes.len()
+                        git.changes.len(),
+                        theme_name_hint(theme)
                     ))
                     .size(13.5)
-                    .color(Color32::from_rgb(180, 175, 169)),
+                    .color(theme.muted_text()),
                 );
             });
         });
 }
 
-fn diff_surface(ui: &mut egui::Ui, change: Option<&GitChange>) {
+fn diff_surface(ui: &mut egui::Ui, change: Option<&GitChange>, theme: &ThemePalette) {
     let mut diff = change
         .map(|change| change.diff.clone())
         .unwrap_or_else(|| "Pick a file on the left and the diff lands here.".into());
 
     Frame::default()
-        .fill(Color32::from_rgb(248, 245, 239))
-        .stroke(Stroke::new(1.0, border()))
+        .fill(theme.terminal_bg())
+        .stroke(Stroke::new(1.0, theme.border()))
         .corner_radius(CornerRadius::same(18))
         .inner_margin(14.0)
         .show(ui, |ui| {
@@ -508,10 +640,15 @@ fn diff_surface(ui: &mut egui::Ui, change: Option<&GitChange>) {
                         "{}  {}  +{} -{}",
                         change.status, change.path, change.added, change.removed
                     ))
-                    .strong(),
+                    .strong()
+                    .color(theme.foreground),
                 );
             } else {
-                ui.label(RichText::new("No file selected").strong());
+                ui.label(
+                    RichText::new("No file selected")
+                        .strong()
+                        .color(theme.foreground),
+                );
             }
             ui.add_space(10.0);
             ScrollArea::vertical().show(ui, |ui| {
@@ -520,28 +657,37 @@ fn diff_surface(ui: &mut egui::Ui, change: Option<&GitChange>) {
                         .font(egui::TextStyle::Monospace)
                         .desired_width(f32::INFINITY)
                         .desired_rows(26)
-                        .interactive(false),
+                        .interactive(false)
+                        .text_color(theme.foreground),
                 );
             });
         });
 }
 
-fn preview_surface(ui: &mut egui::Ui, change: Option<&GitChange>) {
+fn preview_surface(ui: &mut egui::Ui, change: Option<&GitChange>, theme: &ThemePalette) {
     let mut preview = change
         .map(|change| change.preview.clone())
         .unwrap_or_else(|| "Pick a file on the left and the file preview lands here.".into());
 
     Frame::default()
-        .fill(Color32::from_rgb(248, 245, 239))
-        .stroke(Stroke::new(1.0, border()))
+        .fill(theme.terminal_bg())
+        .stroke(Stroke::new(1.0, theme.border()))
         .corner_radius(CornerRadius::same(18))
         .inner_margin(14.0)
         .show(ui, |ui| {
             ui.set_min_height(540.0);
             if let Some(change) = change {
-                ui.label(RichText::new(format!("preview {}", change.path)).strong());
+                ui.label(
+                    RichText::new(format!("preview {}", change.path))
+                        .strong()
+                        .color(theme.foreground),
+                );
             } else {
-                ui.label(RichText::new("No file selected").strong());
+                ui.label(
+                    RichText::new("No file selected")
+                        .strong()
+                        .color(theme.foreground),
+                );
             }
             ui.add_space(10.0);
             ScrollArea::vertical().show(ui, |ui| {
@@ -550,28 +696,35 @@ fn preview_surface(ui: &mut egui::Ui, change: Option<&GitChange>) {
                         .font(egui::TextStyle::Monospace)
                         .desired_width(f32::INFINITY)
                         .desired_rows(26)
-                        .interactive(false),
+                        .interactive(false)
+                        .text_color(theme.foreground),
                 );
             });
         });
 }
 
-fn configure_theme(ctx: &Context) {
-    let mut visuals = egui::Visuals::light();
-    visuals.panel_fill = Color32::from_rgb(252, 249, 244);
-    visuals.extreme_bg_color = paper();
-    visuals.window_fill = Color32::from_rgb(252, 249, 244);
-    visuals.widgets.noninteractive.bg_fill = paper();
-    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, border());
-    visuals.widgets.inactive.bg_fill = paper();
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, border());
-    visuals.widgets.hovered.bg_fill = Color32::from_rgb(243, 238, 231);
-    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, ink());
-    visuals.widgets.active.bg_fill = Color32::from_rgb(234, 226, 216);
-    visuals.widgets.active.bg_stroke = Stroke::new(1.0, ink());
-    visuals.selection.bg_fill = Color32::from_rgb(214, 204, 191);
-    visuals.selection.stroke = Stroke::new(1.0, ink());
-    visuals.override_text_color = Some(ink());
+fn configure_theme(ctx: &Context, theme: &ThemePalette) {
+    let mut visuals = egui::Visuals::dark();
+    visuals.panel_fill = theme.background;
+    visuals.extreme_bg_color = theme.panel_bg();
+    visuals.window_fill = theme.background;
+    visuals.faint_bg_color = theme.card_bg();
+    visuals.widgets.noninteractive.bg_fill = theme.panel_bg();
+    visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, theme.border());
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, theme.foreground);
+    visuals.widgets.inactive.bg_fill = theme.card_bg();
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, theme.border());
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, theme.foreground);
+    visuals.widgets.hovered.bg_fill = theme.hover_fill();
+    visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, theme.strong_border());
+    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, theme.foreground);
+    visuals.widgets.active.bg_fill = theme.selected_fill();
+    visuals.widgets.active.bg_stroke = Stroke::new(1.0, theme.strong_border());
+    visuals.widgets.active.fg_stroke = Stroke::new(1.0, theme.foreground);
+    visuals.selection.bg_fill = theme.selection_background;
+    visuals.selection.stroke = Stroke::new(1.0, theme.selection_foreground);
+    visuals.override_text_color = Some(theme.foreground);
+    visuals.code_bg_color = theme.terminal_bg();
     ctx.set_visuals(visuals);
 
     let mut style = (*ctx.global_style()).clone();
@@ -579,6 +732,56 @@ fn configure_theme(ctx: &Context) {
     style.spacing.button_padding = egui::vec2(12.0, 8.0);
     style.spacing.indent = 14.0;
     ctx.set_global_style(style);
+}
+
+fn paint_backdrop(ctx: &Context, theme: &ThemePalette) {
+    let rect = ctx.viewport_rect();
+    let painter = ctx.layer_painter(LayerId::new(Order::Background, egui::Id::new("theme-bg")));
+    painter.rect_filled(rect, 0.0, theme.background);
+
+    let sweep_center = pos2(
+        rect.left() + rect.width() * 0.68,
+        rect.top() - rect.height() * 0.10,
+    );
+    for index in 0..13 {
+        let radius = rect.width() * 0.10 + index as f32 * 34.0;
+        painter.circle_stroke(
+            sweep_center,
+            radius,
+            Stroke::new(1.0, theme.overlay_line(index)),
+        );
+    }
+
+    for index in 0..14 {
+        let offset = index as f32 * 46.0;
+        painter.line_segment(
+            [
+                pos2(rect.left() - rect.width() * 0.08 + offset, rect.top()),
+                pos2(rect.left() + rect.width() * 0.56 + offset, rect.bottom()),
+            ],
+            Stroke::new(1.0, theme.overlay_line(index)),
+        );
+    }
+
+    painter.circle_filled(
+        pos2(rect.right() - 160.0, rect.top() + 120.0),
+        3.0,
+        theme.cursor,
+    );
+    painter.line_segment(
+        [
+            pos2(rect.right() - 178.0, rect.top() + 120.0),
+            pos2(rect.right() - 142.0, rect.top() + 120.0),
+        ],
+        Stroke::new(1.0, theme.overlay_line(8)),
+    );
+    painter.line_segment(
+        [
+            pos2(rect.right() - 160.0, rect.top() + 102.0),
+            pos2(rect.right() - 160.0, rect.top() + 138.0),
+        ],
+        Stroke::new(1.0, theme.overlay_line(8)),
+    );
 }
 
 fn branch_label(git: &GitSnapshot) -> String {
@@ -591,23 +794,6 @@ fn branch_label(git: &GitSnapshot) -> String {
     }
 }
 
-fn status_fill(status: &str) -> Color32 {
-    if status.contains('?') {
-        return Color32::from_rgb(232, 241, 249);
-    }
-    if status.contains('D') {
-        return Color32::from_rgb(249, 232, 232);
-    }
-    if status.contains('A') {
-        return Color32::from_rgb(233, 244, 233);
-    }
-    if status.contains('R') {
-        return Color32::from_rgb(242, 236, 250);
-    }
-
-    Color32::from_rgb(246, 242, 237)
-}
-
 fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     if value.trim().is_empty() {
         fallback
@@ -616,18 +802,10 @@ fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     }
 }
 
-fn paper() -> Color32 {
-    Color32::from_rgb(250, 247, 241)
-}
-
-fn border() -> Color32 {
-    Color32::from_rgb(211, 203, 193)
-}
-
-fn ink() -> Color32 {
-    Color32::from_rgb(33, 32, 30)
-}
-
-fn ink_muted() -> Color32 {
-    Color32::from_rgb(110, 106, 100)
+fn theme_name_hint(theme: &ThemePalette) -> &'static str {
+    if theme.accent == Color32::from_rgb(122, 162, 247) {
+        "tokyo-night"
+    } else {
+        "custom"
+    }
 }

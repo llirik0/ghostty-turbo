@@ -8,6 +8,7 @@
 - Added live git repository tracking with a changed-file rail, diff mode, and file preview mode.
 - Added context and model-usage telemetry ingestion from `.ghostty-shell/usage-events.jsonl`.
 - Added 12 Rust tests covering git parsing, real repository snapshots, preview handling, and usage-event aggregation.
+- Added a theme catalog that loads `themes/<name>/colors.toml`, applies a dark themed UI, and defaults to `tokyo-night`.
 
 ### Planned
 

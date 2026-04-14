@@ -16,6 +16,8 @@ The current app is a working shell prototype. The shell is live; Ghostty embeddi
 ## Current Features
 
 - Rust desktop app built with `eframe`
+- Theme catalog loaded from `themes/<name>/colors.toml`
+- `tokyo-night` is the default theme when available
 - Live repo detection from the launch directory
 - Changed-file list with status, add/remove counts, diff view, and file preview
 - Usage panel that watches `.ghostty-shell/usage-events.jsonl`
@@ -28,6 +30,26 @@ cargo run
 ```
 
 Launch the app from inside the repo you want it to track.
+
+## Themes
+
+Themes are loaded from the repo-level `themes/` directory using the structure you added:
+
+```text
+themes/
+  tokyo-night/
+    colors.toml
+    preview.png
+    backgrounds/
+    ...
+  catppuccin/
+    colors.toml
+    preview.png
+    backgrounds/
+    ...
+```
+
+`colors.toml` is the canonical app palette. Extra files in each theme directory are preserved as integration hooks for tools like btop, Neovim, VS Code, Waybar, icon packs, keyboard RGB, and wallpapers.
 
 ## Test
 
@@ -62,3 +84,4 @@ Accepted aliases:
 - Replace the center placeholder with a real Ghostty surface from the latest upstream repo
 - Add multi-tab / multi-session handling
 - Add command adapters that write usage events automatically instead of relying on manual JSONL feeds
+- Add richer theme previews and background image rendering from each theme pack
