@@ -58,6 +58,7 @@ cargo test
 ```
 
 The suite covers the git snapshot parser, real temp-repo state collection, preview handling, and usage-event aggregation.
+Right now it contains 52 passing tests across app helpers, theme loading, git parsing, and usage aggregation.
 
 ## Usage Events
 

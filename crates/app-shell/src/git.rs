@@ -307,6 +307,17 @@ mod tests {
     }
 
     #[test]
+    fn parse_branch_line_handles_plain_branch_without_remote() {
+        let mut snapshot = GitSnapshot::default();
+
+        parse_branch_line("## feature/theme-switcher", &mut snapshot);
+
+        assert_eq!(snapshot.branch, "feature/theme-switcher");
+        assert_eq!(snapshot.ahead, 0);
+        assert_eq!(snapshot.behind, 0);
+    }
+
+    #[test]
     fn parse_status_line_handles_rename_and_untracked() {
         assert_eq!(
             parse_status_line("R  old/path.txt -> new/path.txt"),
@@ -319,10 +330,39 @@ mod tests {
     }
 
     #[test]
+    fn parse_status_line_returns_none_for_header_lines() {
+        assert_eq!(parse_status_line("## main"), None);
+        assert_eq!(parse_status_line(""), None);
+    }
+
+    #[test]
+    fn parse_status_line_parses_deleted_file() {
+        assert_eq!(
+            parse_status_line(" D removed.txt"),
+            Some(("D".into(), "removed.txt".into()))
+        );
+    }
+
+    #[test]
+    fn parse_status_line_parses_double_modified_file() {
+        assert_eq!(
+            parse_status_line("MM src/app.rs"),
+            Some(("MM".into(), "src/app.rs".into()))
+        );
+    }
+
+    #[test]
     fn parse_numstat_ignores_binary_markers() {
         let output = "12\t4\tsrc/app.rs\n-\t-\tassets/icon.png\n";
 
         assert_eq!(parse_numstat(output), (12, 4));
+    }
+
+    #[test]
+    fn parse_numstat_sums_multiple_rows() {
+        let output = "2\t1\ta.rs\n4\t0\tb.rs\n";
+
+        assert_eq!(parse_numstat(output), (6, 1));
     }
 
     #[test]
@@ -402,6 +442,29 @@ mod tests {
             Some("Not inside a git repository.")
         );
         assert!(snapshot.repo_root.is_none());
+    }
+
+    #[test]
+    fn stderr_or_fallback_prefers_stderr_contents() {
+        assert_eq!(
+            stderr_or_fallback(b"fatal: bad git day\n", "fallback"),
+            "fatal: bad git day"
+        );
+    }
+
+    #[test]
+    fn stderr_or_fallback_uses_fallback_for_blank_stderr() {
+        assert_eq!(stderr_or_fallback(b"   \n", "fallback"), "fallback");
+    }
+
+    #[test]
+    fn read_preview_returns_missing_file_message() {
+        let temp = TempDir::new().expect("temp dir");
+
+        assert_eq!(
+            read_preview(temp.path(), "missing.txt"),
+            "File is deleted, moved, or not readable from the working tree."
+        );
     }
 
     fn init_git_repo() -> TempDir {

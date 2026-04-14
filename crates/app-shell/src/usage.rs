@@ -275,4 +275,65 @@ not json at all"#,
         assert_eq!(integer_field(&value, &["output_tokens"]), 2);
         assert_eq!(float_field(&value, &["cost"]), 3.0);
     }
+
+    #[test]
+    fn string_field_returns_none_when_missing() {
+        let value: Value = serde_json::json!({"provider":"OpenAI"});
+
+        assert_eq!(string_field(&value, &["model", "model_name"]), None);
+    }
+
+    #[test]
+    fn integer_field_reads_unsigned_value() {
+        let value: Value = serde_json::json!({"input_tokens":42});
+
+        assert_eq!(integer_field(&value, &["input_tokens"]), 42);
+    }
+
+    #[test]
+    fn float_field_reads_float_value() {
+        let value: Value = serde_json::json!({"cost_usd":1.25});
+
+        assert_eq!(float_field(&value, &["cost_usd"]), 1.25);
+    }
+
+    #[test]
+    fn parse_snapshot_contents_deduplicates_sessions() {
+        let snapshot = parse_snapshot_contents(
+            UsageSnapshot {
+                source_path: PathBuf::from("usage.jsonl"),
+                ..Default::default()
+            },
+            r#"{"provider":"OpenAI","model":"gpt-5.4","input_tokens":1,"output_tokens":1,"cost_usd":0.01,"session":"same"}
+{"provider":"OpenAI","model":"gpt-5.4","input_tokens":1,"output_tokens":1,"cost_usd":0.01,"session":"same"}"#,
+        );
+
+        assert_eq!(snapshot.session_count, 1);
+        assert_eq!(snapshot.event_count, 2);
+    }
+
+    #[test]
+    fn parse_snapshot_contents_sorts_more_expensive_model_first() {
+        let snapshot = parse_snapshot_contents(
+            UsageSnapshot {
+                source_path: PathBuf::from("usage.jsonl"),
+                ..Default::default()
+            },
+            r#"{"provider":"OpenAI","model":"cheap","input_tokens":1,"output_tokens":1,"cost_usd":0.01}
+{"provider":"OpenAI","model":"expensive","input_tokens":1,"output_tokens":1,"cost_usd":0.20}"#,
+        );
+
+        assert_eq!(snapshot.models[0].model, "expensive");
+        assert_eq!(snapshot.models[1].model, "cheap");
+    }
+
+    #[test]
+    fn load_snapshot_from_path_returns_error_for_directory() {
+        let temp = TempDir::new().expect("temp dir");
+
+        let snapshot = load_snapshot_from_path(temp.path());
+
+        assert_eq!(snapshot.status, UsageStatus::Error);
+        assert!(snapshot.error.is_some());
+    }
 }

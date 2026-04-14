@@ -7,8 +7,8 @@ use std::{
 };
 
 use eframe::egui::{
-    self, Align, CentralPanel, Color32, Context, CornerRadius, Frame, LayerId, Layout, Order,
-    Panel, RichText, ScrollArea, Stroke, TextEdit, pos2,
+    self, Align, CentralPanel, Context, CornerRadius, Frame, Layout, Panel, RichText, ScrollArea,
+    Stroke, TextEdit,
 };
 
 use crate::{
@@ -91,204 +91,200 @@ impl GhosttyShellApp {
             .or_else(|| self.workspace.git.changes.first())
     }
 
-    fn left_panel(&mut self, ui: &mut egui::Ui) {
+    fn left_column(&mut self, ui: &mut egui::Ui) {
         let theme = self.active_theme().palette.clone();
 
-        Panel::left("repo_changes")
-            .resizable(true)
-            .default_size(290.0)
-            .min_size(240.0)
-            .show_inside(ui, |ui| {
-                shell_panel(ui, "Changed Files", &theme, |ui| {
-                    if self.workspace.git.repo_root.is_none() {
-                        empty_state(
-                            ui,
-                            &theme,
-                            "No repo detected",
-                            "Launch the shell from inside a git repo and the left rail stops being decorative.",
-                        );
-                        return;
-                    }
+        shell_panel(ui, "Changed Files", &theme, |ui| {
+            if self.workspace.git.repo_root.is_none() {
+                empty_state(
+                    ui,
+                    &theme,
+                    "No repo detected",
+                    "Launch the shell from inside a git repo and the left rail stops being decorative.",
+                );
+                return;
+            }
 
-                    ui.horizontal_wrapped(|ui| {
-                        tag(ui, &theme, "Repo", &self.workspace.git.repo_name);
-                        tag(ui, &theme, "Branch", &branch_label(&self.workspace.git));
-                    });
-                    ui.add_space(8.0);
-                    ui.label(
-                        RichText::new(format!(
-                            "{} files / +{} -{}",
-                            self.workspace.git.changes.len(),
-                            self.workspace.git.total_added,
-                            self.workspace.git.total_removed
-                        ))
-                        .color(theme.muted_text()),
-                    );
-                    ui.add_space(10.0);
-
-                    ScrollArea::vertical()
-                        .auto_shrink([false; 2])
-                        .show(ui, |ui| {
-                            for change in &self.workspace.git.changes {
-                                let selected =
-                                    self.selected_path.as_deref() == Some(change.path.as_str());
-                                let button = egui::Button::new(
-                                    RichText::new(format!(
-                                        "{}\n{}  +{} -{}",
-                                        change.path, change.status, change.added, change.removed
-                                    ))
-                                    .size(13.5),
-                                )
-                                .selected(selected)
-                                .fill(if selected {
-                                    theme.selected_fill()
-                                } else {
-                                    theme.status_fill(&change.status)
-                                })
-                                .stroke(Stroke::new(
-                                    1.0,
-                                    if selected {
-                                        theme.strong_border()
-                                    } else {
-                                        theme.border()
-                                    },
-                                ))
-                                .corner_radius(CornerRadius::same(10));
-
-                                if ui.add_sized([ui.available_width(), 48.0], button).clicked() {
-                                    self.selected_path = Some(change.path.clone());
-                                }
-
-                                ui.add_space(6.0);
-                            }
-                        });
-                });
+            ui.horizontal_wrapped(|ui| {
+                tag(ui, &theme, "Repo", &self.workspace.git.repo_name);
+                tag(ui, &theme, "Branch", &branch_label(&self.workspace.git));
             });
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new(format!(
+                    "{} files / +{} -{}",
+                    self.workspace.git.changes.len(),
+                    self.workspace.git.total_added,
+                    self.workspace.git.total_removed
+                ))
+                .color(theme.muted_text()),
+            );
+            ui.add_space(10.0);
+
+            ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    for change in &self.workspace.git.changes {
+                        let selected = self.selected_path.as_deref() == Some(change.path.as_str());
+                        let button = egui::Button::new(
+                            RichText::new(format!(
+                                "{}\n{}  +{} -{}",
+                                change.path, change.status, change.added, change.removed
+                            ))
+                            .size(13.5),
+                        )
+                        .selected(selected)
+                        .fill(if selected {
+                            theme.selected_fill()
+                        } else {
+                            theme.status_fill(&change.status)
+                        })
+                        .stroke(Stroke::new(
+                            1.0,
+                            if selected {
+                                theme.strong_border()
+                            } else {
+                                theme.border()
+                            },
+                        ))
+                        .corner_radius(CornerRadius::same(10));
+
+                        if ui.add_sized([ui.available_width(), 48.0], button).clicked() {
+                            self.selected_path = Some(change.path.clone());
+                        }
+
+                        ui.add_space(6.0);
+                    }
+                });
+        });
     }
 
-    fn right_panel(&self, ui: &mut egui::Ui) {
+    fn right_column(&self, ui: &mut egui::Ui) {
         let theme = &self.active_theme().palette;
         let active_theme = self.active_theme();
 
-        Panel::right("usage_panel")
-            .resizable(true)
-            .default_size(340.0)
-            .min_size(300.0)
-            .show_inside(ui, |ui| {
-                shell_panel(ui, "Context + Model Usage", theme, |ui| {
-                    stat_card(
-                        ui,
-                        theme,
-                        "Theme Pack",
-                        &active_theme.name,
-                        &format!(
-                            "{} / {} / {} extras",
-                            active_theme
-                                .preview
-                                .as_deref()
-                                .and_then(|path| path.file_name())
-                                .and_then(|name| name.to_str())
-                                .unwrap_or("no preview"),
-                            active_theme.integrations.len(),
-                            active_theme
-                                .background
-                                .as_deref()
-                                .and_then(|path| path.file_name())
-                                .and_then(|name| name.to_str())
-                                .unwrap_or("no background preview")
-                        ),
-                    );
-                    ui.add_space(8.0);
+        shell_panel(ui, "Context + Model Usage", theme, |ui| {
+            stat_card(
+                ui,
+                theme,
+                "Theme Pack",
+                &active_theme.name,
+                &format!(
+                    "{} / {} / {} extras",
+                    active_theme
+                        .preview
+                        .as_deref()
+                        .and_then(|path| path.file_name())
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("no preview"),
+                    active_theme.integrations.len(),
+                    active_theme
+                        .background
+                        .as_deref()
+                        .and_then(|path| path.file_name())
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("no background preview")
+                ),
+            );
+            ui.add_space(8.0);
 
-                    stat_card(
-                        ui,
-                        theme,
-                        "Tracked",
-                        "Token totals",
-                        &format!(
-                            "{} in / {} out / ${:.02}",
-                            self.workspace.usage.total_input_tokens,
-                            self.workspace.usage.total_output_tokens,
-                            self.workspace.usage.total_cost_usd
-                        ),
-                    );
-                    ui.add_space(8.0);
+            stat_card(
+                ui,
+                theme,
+                "Tracked",
+                "Token totals",
+                &format!(
+                    "{} in / {} out / ${:.02}",
+                    self.workspace.usage.total_input_tokens,
+                    self.workspace.usage.total_output_tokens,
+                    self.workspace.usage.total_cost_usd
+                ),
+            );
+            ui.add_space(8.0);
 
-                    stat_card(
-                        ui,
-                        theme,
-                        "Sessions",
-                        "Event feed",
-                        &format!(
-                            "{} sessions / {} events",
-                            self.workspace.usage.session_count, self.workspace.usage.event_count
-                        ),
-                    );
-                    ui.add_space(10.0);
+            stat_card(
+                ui,
+                theme,
+                "Sessions",
+                "Event feed",
+                &format!(
+                    "{} sessions / {} events",
+                    self.workspace.usage.session_count, self.workspace.usage.event_count
+                ),
+            );
+            ui.add_space(10.0);
 
-                    match self.workspace.usage.status {
-                        UsageStatus::Ready | UsageStatus::ParseWarning => {
-                            for summary in self.workspace.usage.models.iter().take(4) {
-                                stat_card(
-                                    ui,
-                                    theme,
-                                    &summary.provider,
-                                    &summary.model,
-                                    &format!(
-                                        "{} in / {} out / ${:.02} / {} events",
-                                        summary.input_tokens,
-                                        summary.output_tokens,
-                                        summary.cost_usd,
-                                        summary.event_count
-                                    ),
-                                );
-                                ui.add_space(8.0);
-                            }
-                        }
-                        UsageStatus::AwaitingFile => empty_state(
+            match self.workspace.usage.status {
+                UsageStatus::Ready | UsageStatus::ParseWarning => {
+                    for summary in self.workspace.usage.models.iter().take(4) {
+                        stat_card(
                             ui,
                             theme,
-                            "No usage log yet",
-                            "Feed JSONL events into .ghostty-shell/usage-events.jsonl or set GHOSTTY_SHELL_USAGE_LOG.",
-                        ),
-                        UsageStatus::AwaitingEvents => empty_state(
-                            ui,
-                            theme,
-                            "Usage log is empty",
-                            "The pipe exists. Now give it actual model events.",
-                        ),
-                        UsageStatus::Error => empty_state(
-                            ui,
-                            theme,
-                            "Usage parsing failed",
-                            self.workspace
-                                .usage
-                                .error
-                                .as_deref()
-                                .unwrap_or("The event stream is malformed."),
-                        ),
-                    }
-
-                    ui.add_space(8.0);
-                    if let Some(directory) = &active_theme.directory {
-                        ui.label(RichText::new("Theme source").size(12.0).color(theme.muted_text()));
-                        ui.monospace(directory.display().to_string());
+                            &summary.provider,
+                            &summary.model,
+                            &format!(
+                                "{} in / {} out / ${:.02} / {} events",
+                                summary.input_tokens,
+                                summary.output_tokens,
+                                summary.cost_usd,
+                                summary.event_count
+                            ),
+                        );
                         ui.add_space(8.0);
                     }
+                }
+                UsageStatus::AwaitingFile => empty_state(
+                    ui,
+                    theme,
+                    "No usage log yet",
+                    "Feed JSONL events into .ghostty-shell/usage-events.jsonl or set GHOSTTY_SHELL_USAGE_LOG.",
+                ),
+                UsageStatus::AwaitingEvents => empty_state(
+                    ui,
+                    theme,
+                    "Usage log is empty",
+                    "The pipe exists. Now give it actual model events.",
+                ),
+                UsageStatus::Error => empty_state(
+                    ui,
+                    theme,
+                    "Usage parsing failed",
+                    self.workspace
+                        .usage
+                        .error
+                        .as_deref()
+                        .unwrap_or("The event stream is malformed."),
+                ),
+            }
 
-                    ui.label(RichText::new("Watching").size(12.0).color(theme.muted_text()));
-                    ui.monospace(self.workspace.usage.source_path.display().to_string());
-                });
-            });
+            ui.add_space(8.0);
+            if let Some(directory) = &active_theme.directory {
+                ui.label(
+                    RichText::new("Theme source")
+                        .size(12.0)
+                        .color(theme.muted_text()),
+                );
+                ui.monospace(directory.display().to_string());
+                ui.add_space(8.0);
+            }
+
+            ui.label(
+                RichText::new("Watching")
+                    .size(12.0)
+                    .color(theme.muted_text()),
+            );
+            ui.monospace(self.workspace.usage.source_path.display().to_string());
+        });
     }
 
+    #[allow(deprecated)]
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let theme = self.active_theme().palette.clone();
 
         Panel::top("header")
             .resizable(false)
             .exact_size(64.0)
-            .show_inside(ui, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.heading(
@@ -316,7 +312,7 @@ impl GhosttyShellApp {
                                         theme.border()
                                     },
                                 ))
-                                .corner_radius(CornerRadius::same(999.min(u8::MAX as i32) as u8));
+                                .corner_radius(CornerRadius::same(255));
 
                         if ui.add(button).clicked() && self.themes.set_active_by_slug(&entry.slug) {
                             configure_theme(ui.ctx(), &self.active_theme().palette);
@@ -331,13 +327,14 @@ impl GhosttyShellApp {
             });
     }
 
+    #[allow(deprecated)]
     fn bottom_bar(&self, ui: &mut egui::Ui) {
         let theme = &self.active_theme().palette;
 
         Panel::bottom("status")
             .resizable(false)
             .exact_size(42.0)
-            .show_inside(ui, |ui| {
+            .show(ui.ctx(), |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.label(
                         RichText::new(format!(
@@ -382,68 +379,95 @@ impl GhosttyShellApp {
             });
     }
 
-    fn center_panel(&mut self, ui: &mut egui::Ui) {
-        let theme = self.active_theme().palette.clone();
+    fn center_column(&mut self, ui: &mut egui::Ui) {
+        let active_theme = self.active_theme().clone();
+        let theme = active_theme.palette.clone();
 
-        CentralPanel::default().show_inside(ui, |ui| {
-            shell_panel(ui, "Ghostty Session / File Viewer", &theme, |ui| {
-                ui.horizontal(|ui| {
-                    for mode in CenterMode::ALL {
-                        let selected = self.center_mode == mode;
-                        let button = egui::Button::new(RichText::new(mode.title()).size(13.5))
-                            .selected(selected)
-                            .fill(if selected {
-                                theme.selected_fill()
+        shell_panel(ui, "Ghostty Session / File Viewer", &theme, |ui| {
+            ui.horizontal(|ui| {
+                for mode in CenterMode::ALL {
+                    let selected = self.center_mode == mode;
+                    let button = egui::Button::new(RichText::new(mode.title()).size(13.5))
+                        .selected(selected)
+                        .fill(if selected {
+                            theme.selected_fill()
+                        } else {
+                            theme.card_bg()
+                        })
+                        .stroke(Stroke::new(
+                            1.0,
+                            if selected {
+                                theme.strong_border()
                             } else {
-                                theme.card_bg()
-                            })
-                            .stroke(Stroke::new(
-                                1.0,
-                                if selected {
-                                    theme.strong_border()
-                                } else {
-                                    theme.border()
-                                },
-                            ))
-                            .corner_radius(CornerRadius::same(9));
+                                theme.border()
+                            },
+                        ))
+                        .corner_radius(CornerRadius::same(9));
 
-                        if ui.add(button).clicked() {
-                            self.center_mode = mode;
-                        }
+                    if ui.add(button).clicked() {
+                        self.center_mode = mode;
                     }
-                });
-
-                if let Some(change) = self.selected_item() {
-                    ui.add_space(10.0);
-                    ui.horizontal_wrapped(|ui| {
-                        tag(ui, &theme, "Focus", &change.path);
-                        tag(ui, &theme, "State", &change.status);
-                    });
-                }
-
-                ui.add_space(12.0);
-
-                match self.center_mode {
-                    CenterMode::Terminal => terminal_surface(ui, &self.workspace.git, &theme),
-                    CenterMode::Diff => diff_surface(ui, self.selected_item(), &theme),
-                    CenterMode::Preview => preview_surface(ui, self.selected_item(), &theme),
                 }
             });
+
+            if let Some(change) = self.selected_item() {
+                ui.add_space(10.0);
+                ui.horizontal_wrapped(|ui| {
+                    tag(ui, &theme, "Focus", &change.path);
+                    tag(ui, &theme, "State", &change.status);
+                });
+            }
+
+            ui.add_space(12.0);
+
+            match self.center_mode {
+                CenterMode::Terminal => {
+                    terminal_surface(ui, &self.workspace.git, &theme, &active_theme.name)
+                }
+                CenterMode::Diff => diff_surface(ui, self.selected_item(), &theme),
+                CenterMode::Preview => preview_surface(ui, self.selected_item(), &theme),
+            }
         });
     }
 }
 
 impl eframe::App for GhosttyShellApp {
+    #[allow(deprecated)]
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.drain_updates();
         ui.ctx().request_repaint_after(Duration::from_millis(250));
-        paint_backdrop(ui.ctx(), &self.active_theme().palette);
 
         self.top_bar(ui);
-        self.left_panel(ui);
-        self.right_panel(ui);
         self.bottom_bar(ui);
-        self.center_panel(ui);
+
+        CentralPanel::default().show(ui.ctx(), |ui| {
+            let available_width = ui.available_width();
+            let height = ui.available_height();
+            let gap = 14.0;
+            let left_width = 290.0f32.min((available_width * 0.24).max(220.0));
+            let right_width = 340.0f32.min((available_width * 0.26).max(260.0));
+            let center_width = (available_width - left_width - right_width - gap * 2.0).max(360.0);
+
+            ui.spacing_mut().item_spacing.x = gap;
+
+            ui.horizontal_top(|ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(left_width, height),
+                    Layout::top_down(Align::Min),
+                    |ui| self.left_column(ui),
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(center_width, height),
+                    Layout::top_down(Align::Min),
+                    |ui| self.center_column(ui),
+                );
+                ui.allocate_ui_with_layout(
+                    egui::vec2(right_width, height),
+                    Layout::top_down(Align::Min),
+                    |ui| self.right_column(ui),
+                );
+            });
+        });
     }
 }
 
@@ -580,7 +604,7 @@ fn empty_state(ui: &mut egui::Ui, theme: &ThemePalette, title: &str, body: &str)
         });
 }
 
-fn terminal_surface(ui: &mut egui::Ui, git: &GitSnapshot, theme: &ThemePalette) {
+fn terminal_surface(ui: &mut egui::Ui, git: &GitSnapshot, theme: &ThemePalette, theme_name: &str) {
     Frame::default()
         .fill(theme.terminal_bg())
         .stroke(Stroke::new(1.0, theme.strong_border()))
@@ -611,7 +635,7 @@ fn terminal_surface(ui: &mut egui::Ui, git: &GitSnapshot, theme: &ThemePalette) 
                         non_empty(&git.repo_name, "none"),
                         branch_label(git),
                         git.changes.len(),
-                        theme_name_hint(theme)
+                        theme_name
                     ))
                     .size(13.5)
                     .color(theme.muted_text()),
@@ -732,56 +756,6 @@ fn configure_theme(ctx: &Context, theme: &ThemePalette) {
     ctx.set_global_style(style);
 }
 
-fn paint_backdrop(ctx: &Context, theme: &ThemePalette) {
-    let rect = ctx.viewport_rect();
-    let painter = ctx.layer_painter(LayerId::new(Order::Background, egui::Id::new("theme-bg")));
-    painter.rect_filled(rect, 0.0, theme.background);
-
-    let sweep_center = pos2(
-        rect.left() + rect.width() * 0.68,
-        rect.top() - rect.height() * 0.10,
-    );
-    for index in 0..13 {
-        let radius = rect.width() * 0.10 + index as f32 * 34.0;
-        painter.circle_stroke(
-            sweep_center,
-            radius,
-            Stroke::new(1.0, theme.overlay_line(index)),
-        );
-    }
-
-    for index in 0..14 {
-        let offset = index as f32 * 46.0;
-        painter.line_segment(
-            [
-                pos2(rect.left() - rect.width() * 0.08 + offset, rect.top()),
-                pos2(rect.left() + rect.width() * 0.56 + offset, rect.bottom()),
-            ],
-            Stroke::new(1.0, theme.overlay_line(index)),
-        );
-    }
-
-    painter.circle_filled(
-        pos2(rect.right() - 160.0, rect.top() + 120.0),
-        3.0,
-        theme.cursor,
-    );
-    painter.line_segment(
-        [
-            pos2(rect.right() - 178.0, rect.top() + 120.0),
-            pos2(rect.right() - 142.0, rect.top() + 120.0),
-        ],
-        Stroke::new(1.0, theme.overlay_line(8)),
-    );
-    painter.line_segment(
-        [
-            pos2(rect.right() - 160.0, rect.top() + 102.0),
-            pos2(rect.right() - 160.0, rect.top() + 138.0),
-        ],
-        Stroke::new(1.0, theme.overlay_line(8)),
-    );
-}
-
 fn branch_label(git: &GitSnapshot) -> String {
     let branch = non_empty(&git.branch, "detached");
     match (git.ahead, git.behind) {
@@ -800,10 +774,76 @@ fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     }
 }
 
-fn theme_name_hint(theme: &ThemePalette) -> &'static str {
-    if theme.accent == Color32::from_rgb(122, 162, 247) {
-        "tokyo-night"
-    } else {
-        "custom"
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_label_plain_branch() {
+        let snapshot = GitSnapshot {
+            branch: "main".into(),
+            ..Default::default()
+        };
+
+        assert_eq!(branch_label(&snapshot), "main");
+    }
+
+    #[test]
+    fn branch_label_ahead_branch() {
+        let snapshot = GitSnapshot {
+            branch: "main".into(),
+            ahead: 2,
+            ..Default::default()
+        };
+
+        assert_eq!(branch_label(&snapshot), "main +2");
+    }
+
+    #[test]
+    fn branch_label_behind_branch() {
+        let snapshot = GitSnapshot {
+            branch: "main".into(),
+            behind: 3,
+            ..Default::default()
+        };
+
+        assert_eq!(branch_label(&snapshot), "main -3");
+    }
+
+    #[test]
+    fn branch_label_ahead_and_behind_branch() {
+        let snapshot = GitSnapshot {
+            branch: "main".into(),
+            ahead: 2,
+            behind: 1,
+            ..Default::default()
+        };
+
+        assert_eq!(branch_label(&snapshot), "main +2/-1");
+    }
+
+    #[test]
+    fn non_empty_keeps_existing_value() {
+        assert_eq!(non_empty("tokyo-night", "fallback"), "tokyo-night");
+    }
+
+    #[test]
+    fn non_empty_uses_fallback_for_blank_value() {
+        assert_eq!(non_empty("   ", "fallback"), "fallback");
+    }
+
+    #[test]
+    fn center_mode_terminal_title() {
+        assert_eq!(CenterMode::Terminal.title(), "Terminal");
+    }
+
+    #[test]
+    fn center_mode_diff_title() {
+        assert_eq!(CenterMode::Diff.title(), "Diff");
+    }
+
+    #[test]
+    fn center_mode_preview_title() {
+        assert_eq!(CenterMode::Preview.title(), "Preview");
     }
 }

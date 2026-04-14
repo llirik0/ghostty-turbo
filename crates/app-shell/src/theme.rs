@@ -108,6 +108,7 @@ impl AppTheme {
 #[derive(Clone, Debug)]
 pub struct ThemePalette {
     pub accent: Color32,
+    #[allow(dead_code)]
     pub cursor: Color32,
     pub foreground: Color32,
     pub background: Color32,
@@ -155,11 +156,6 @@ impl ThemePalette {
 
     pub fn hover_fill(&self) -> Color32 {
         mix(self.accent, self.background, 0.18)
-    }
-
-    pub fn overlay_line(&self, step: usize) -> Color32 {
-        let blend = mix(self.accent, self.colors[13], (step as f32 / 12.0).min(1.0));
-        with_alpha(blend, 18 + (step as u8 * 6))
     }
 
     pub fn status_fill(&self, status: &str) -> Color32 {
@@ -365,4 +361,221 @@ fn mix(a: Color32, b: Color32, amount: f32) -> Color32 {
 
 fn with_alpha(color: Color32, alpha: u8) -> Color32 {
     Color32::from_rgba_premultiplied(color.r(), color.g(), color.b(), alpha)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn fallback_tokyo_night_has_expected_slug_and_accent() {
+        let theme = AppTheme::fallback_tokyo_night();
+
+        assert_eq!(theme.slug, "tokyo-night");
+        assert_eq!(theme.name, "Tokyo Night");
+        assert_eq!(theme.palette.accent, Color32::from_rgb(122, 162, 247));
+    }
+
+    #[test]
+    fn theme_catalog_prefers_tokyo_night_as_default() {
+        let temp = TempDir::new().expect("temp dir");
+        create_theme(temp.path(), "catppuccin");
+        create_theme(temp.path(), "tokyo-night");
+
+        let catalog = ThemeCatalog::load(temp.path());
+
+        assert_eq!(catalog.active().slug, "tokyo-night");
+    }
+
+    #[test]
+    fn theme_catalog_falls_back_to_first_theme_when_tokyo_missing() {
+        let temp = TempDir::new().expect("temp dir");
+        create_theme(temp.path(), "catppuccin");
+        create_theme(temp.path(), "solarized");
+
+        let catalog = ThemeCatalog::load(temp.path());
+
+        assert_eq!(catalog.active().slug, "catppuccin");
+    }
+
+    #[test]
+    fn theme_catalog_switches_active_theme_by_slug() {
+        let temp = TempDir::new().expect("temp dir");
+        create_theme(temp.path(), "catppuccin");
+        create_theme(temp.path(), "tokyo-night");
+        let mut catalog = ThemeCatalog::load(temp.path());
+
+        assert!(catalog.set_active_by_slug("catppuccin"));
+        assert_eq!(catalog.active().slug, "catppuccin");
+    }
+
+    #[test]
+    fn theme_catalog_rejects_unknown_theme_slug() {
+        let temp = TempDir::new().expect("temp dir");
+        create_theme(temp.path(), "tokyo-night");
+        let mut catalog = ThemeCatalog::load(temp.path());
+
+        assert!(!catalog.set_active_by_slug("missing"));
+        assert_eq!(catalog.active().slug, "tokyo-night");
+    }
+
+    #[test]
+    fn load_theme_reads_preview_background_and_integrations() {
+        let temp = TempDir::new().expect("temp dir");
+        let theme_dir = create_theme(temp.path(), "tokyo-night");
+        fs::write(theme_dir.join("preview.png"), "preview").expect("preview");
+        fs::create_dir_all(theme_dir.join("backgrounds")).expect("background dir");
+        fs::write(theme_dir.join("backgrounds/2-b.png"), "bg").expect("background 2");
+        fs::write(theme_dir.join("backgrounds/1-a.png"), "bg").expect("background 1");
+        fs::write(theme_dir.join("neovim.lua"), "return {}").expect("integration");
+
+        let theme = load_theme(theme_dir.clone()).expect("theme");
+
+        assert_eq!(
+            theme.preview.as_deref(),
+            Some(theme_dir.join("preview.png").as_path())
+        );
+        assert_eq!(
+            theme.background.as_deref(),
+            Some(theme_dir.join("backgrounds/1-a.png").as_path())
+        );
+        assert!(
+            theme.integrations.iter().any(|path| {
+                path.file_name().and_then(|name| name.to_str()) == Some("neovim.lua")
+            })
+        );
+    }
+
+    #[test]
+    fn load_theme_skips_invalid_theme_dir() {
+        let temp = TempDir::new().expect("temp dir");
+        let invalid = temp.path().join("broken");
+        fs::create_dir_all(&invalid).expect("broken theme");
+
+        assert!(load_theme(invalid).is_none());
+    }
+
+    #[test]
+    fn resolve_themes_dir_uses_search_root_theme_dir() {
+        let temp = TempDir::new().expect("temp dir");
+        let themes_dir = temp.path().join("themes");
+        fs::create_dir_all(&themes_dir).expect("themes dir");
+
+        assert_eq!(
+            resolve_themes_dir(temp.path()).as_deref(),
+            Some(themes_dir.as_path())
+        );
+    }
+
+    #[test]
+    fn collect_integrations_ignores_colors_file() {
+        let temp = TempDir::new().expect("temp dir");
+        let theme_dir = create_theme(temp.path(), "tokyo-night");
+        fs::write(theme_dir.join("preview.png"), "preview").expect("preview");
+        fs::write(theme_dir.join("waybar.css"), "css").expect("waybar");
+
+        let integrations = collect_integrations(&theme_dir);
+
+        assert!(!integrations.iter().any(|path| {
+            path.file_name().and_then(|name| name.to_str()) == Some("colors.toml")
+        }));
+        assert!(
+            integrations.iter().any(|path| {
+                path.file_name().and_then(|name| name.to_str()) == Some("waybar.css")
+            })
+        );
+    }
+
+    #[test]
+    fn first_file_in_returns_sorted_first_file() {
+        let temp = TempDir::new().expect("temp dir");
+        let dir = temp.path().join("backgrounds");
+        fs::create_dir_all(&dir).expect("dir");
+        fs::write(dir.join("b.png"), "b").expect("b");
+        fs::write(dir.join("a.png"), "a").expect("a");
+
+        assert_eq!(
+            first_file_in(&dir).as_deref(),
+            Some(dir.join("a.png").as_path())
+        );
+    }
+
+    #[test]
+    fn display_name_formats_slug() {
+        assert_eq!(display_name("tokyo-night"), "Tokyo Night");
+        assert_eq!(display_name("catppuccin_mocha"), "Catppuccin Mocha");
+    }
+
+    #[test]
+    fn parse_hex_reads_rgb_value() {
+        assert_eq!(parse_hex("#7aa2f7"), Color32::from_rgb(122, 162, 247));
+    }
+
+    #[test]
+    fn parse_hex_accepts_missing_hash() {
+        assert_eq!(parse_hex("1a1b26"), Color32::from_rgb(26, 27, 38));
+    }
+
+    #[test]
+    fn parse_hex_bad_length_returns_white() {
+        assert_eq!(parse_hex("#12345"), Color32::WHITE);
+    }
+
+    #[test]
+    fn mix_zero_and_one_return_inputs() {
+        let a = Color32::from_rgb(10, 20, 30);
+        let b = Color32::from_rgb(200, 210, 220);
+
+        assert_eq!(mix(a, b, 0.0), a);
+        assert_eq!(mix(a, b, 1.0), b);
+    }
+
+    #[test]
+    fn with_alpha_sets_alpha() {
+        assert_eq!(with_alpha(Color32::from_rgb(1, 2, 3), 77).a(), 77);
+    }
+
+    #[test]
+    fn status_fill_changes_by_status() {
+        let palette = AppTheme::fallback_tokyo_night().palette;
+
+        assert_ne!(palette.status_fill("??"), palette.status_fill("A"));
+        assert_ne!(palette.status_fill("D"), palette.status_fill("R"));
+        assert_ne!(palette.status_fill("M"), palette.status_fill("D"));
+    }
+
+    fn create_theme(root: &Path, slug: &str) -> PathBuf {
+        let theme_dir = root.join("themes").join(slug);
+        fs::create_dir_all(&theme_dir).expect("theme dir");
+        fs::write(theme_dir.join("colors.toml"), sample_colors()).expect("colors");
+        theme_dir
+    }
+
+    fn sample_colors() -> &'static str {
+        r##"accent = "#7aa2f7"
+cursor = "#c0caf5"
+foreground = "#a9b1d6"
+background = "#1a1b26"
+selection_foreground = "#c0caf5"
+selection_background = "#7aa2f7"
+
+color0 = "#32344a"
+color1 = "#f7768e"
+color2 = "#9ece6a"
+color3 = "#e0af68"
+color4 = "#7aa2f7"
+color5 = "#ad8ee6"
+color6 = "#449dab"
+color7 = "#787c99"
+color8 = "#444b6a"
+color9 = "#ff7a93"
+color10 = "#b9f27c"
+color11 = "#ff9e64"
+color12 = "#7da6ff"
+color13 = "#bb9af7"
+color14 = "#0db9d7"
+color15 = "#acb0d0"
+"##
+    }
 }
