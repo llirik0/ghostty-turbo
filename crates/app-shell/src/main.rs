@@ -1,4 +1,6 @@
 mod app;
+mod ghostty;
+mod ghostty_embed;
 mod git;
 mod theme;
 mod usage;

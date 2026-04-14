@@ -9,7 +9,7 @@ Three-pane Rust shell around Ghostty:
 - Center: terminal surface slot plus `Diff` and `Preview` modes
 - Right rail: context and model-usage telemetry from JSONL events
 
-The current app is a working shell prototype. The shell is live; Ghostty embedding is the next step, and it will target the latest upstream Ghostty repo:
+The shell now embeds a real Ghostty surface inside the center pane on macOS through latest-upstream `libghostty`. The external Ghostty process bridge is still there as a fallback when the embed artifacts have not been built yet.
 
 - Upstream: `https://github.com/ghostty-org/ghostty`
 
@@ -18,6 +18,7 @@ The current app is a working shell prototype. The shell is live; Ghostty embeddi
 - Rust desktop app built with `eframe`
 - Theme catalog loaded from `themes/<name>/colors.toml`
 - `tokyo-night` is the default theme when available
+- Embedded Ghostty surface rendered inside the shell window on macOS
 - Live repo detection from the launch directory
 - Changed-file list with status, add/remove counts, diff view, and file preview
 - Usage panel that watches `.ghostty-shell/usage-events.jsonl`
@@ -26,10 +27,12 @@ The current app is a working shell prototype. The shell is live; Ghostty embeddi
 ## Run
 
 ```bash
+./scripts/bootstrap_ghostty_latest.sh
 cargo run
 ```
 
 Launch the app from inside the repo you want it to track.
+If you skip the bootstrap step, the shell still builds, but the center pane drops back to the Ghostty bridge card instead of the embedded terminal.
 
 ## Themes
 
@@ -58,7 +61,23 @@ cargo test
 ```
 
 The suite covers the git snapshot parser, real temp-repo state collection, preview handling, and usage-event aggregation.
-Right now it contains 52 passing tests across app helpers, theme loading, git parsing, and usage aggregation.
+Right now it contains 70 passing tests across app helpers, theme loading, git parsing, Ghostty bridge helpers, and usage aggregation.
+
+## Ghostty Embed
+
+The center pane now renders Ghostty in-process on macOS:
+
+- `scripts/bootstrap_ghostty_latest.sh` clones latest `ghostty-org/ghostty` into `target/ghostty-upstream/ghostty`
+- the script builds `GhosttyKit.xcframework`
+- `build.rs` generates fresh bindings from `ghostty.h` and links `libghostty-fat.a`
+- the app mounts Ghostty into a native child `NSView` inside the `eframe` window
+
+If the embed artifacts are missing, the shell falls back to the process bridge. That path can still use a custom Ghostty install:
+
+```bash
+export GHOSTTY_APP="/path/to/Ghostty.app"
+export GHOSTTY_BIN="/path/to/ghostty"
+```
 
 ## Usage Events
 
@@ -82,7 +101,6 @@ Accepted aliases:
 
 ## Next Moves
 
-- Replace the center placeholder with a real Ghostty surface from the latest upstream repo
 - Add multi-tab / multi-session handling
 - Add command adapters that write usage events automatically instead of relying on manual JSONL feeds
 - Add richer theme previews and background image rendering from each theme pack

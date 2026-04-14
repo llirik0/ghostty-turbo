@@ -1,17 +1,19 @@
 use std::{
     env,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::{self, Receiver, Sender},
     thread,
     time::Duration,
 };
 
 use eframe::egui::{
-    self, Align, CentralPanel, Context, CornerRadius, Frame, Layout, Panel, RichText, ScrollArea,
-    Stroke, TextEdit,
+    self, Align, CentralPanel, Context, CornerRadius, Frame, Layout, Panel, Rect, RichText,
+    ScrollArea, Stroke, TextEdit,
 };
 
 use crate::{
+    ghostty::{self, ActionResult as GhosttyActionResult, GhosttyInstallation, WorkspaceRequest},
+    ghostty_embed::{EmbeddedGhostty, EmbeddedGhosttySnapshot},
     git::{self, GitChange, GitSnapshot},
     theme::{AppTheme, ThemeCatalog, ThemePalette},
     usage::{self, UsageSnapshot, UsageStatus},
@@ -23,6 +25,10 @@ pub struct GhosttyShellApp {
     themes: ThemeCatalog,
     workspace: WorkspaceSnapshot,
     workspace_rx: Receiver<WorkspaceSnapshot>,
+    ghostty: GhosttyPanelState,
+    embedded_terminal: EmbeddedGhostty,
+    ghostty_action_rx: Receiver<GhosttyActionResult>,
+    ghostty_action_tx: Sender<GhosttyActionResult>,
 }
 
 impl GhosttyShellApp {
@@ -37,6 +43,9 @@ impl GhosttyShellApp {
             .changes
             .first()
             .map(|change| change.path.clone());
+        let initial_request = WorkspaceRequest::new(workspace.git.repo_root.as_deref(), &cwd);
+        let ghostty_installation = ghostty::detect_installation();
+        let (ghostty_action_tx, ghostty_action_rx) = mpsc::channel();
 
         Self {
             center_mode: CenterMode::Terminal,
@@ -44,6 +53,10 @@ impl GhosttyShellApp {
             themes,
             workspace_rx: spawn_workspace_worker(cwd),
             workspace,
+            ghostty: GhosttyPanelState::new(ghostty_installation),
+            embedded_terminal: EmbeddedGhostty::new(cc, &initial_request),
+            ghostty_action_rx,
+            ghostty_action_tx,
         }
     }
 
@@ -76,6 +89,11 @@ impl GhosttyShellApp {
 
             self.workspace = snapshot;
         }
+
+        while let Ok(result) = self.ghostty_action_rx.try_recv() {
+            self.ghostty.busy = false;
+            self.ghostty.last_message = result.summary;
+        }
     }
 
     fn selected_item(&self) -> Option<&GitChange> {
@@ -89,6 +107,44 @@ impl GhosttyShellApp {
                     .find(|change| change.path == path)
             })
             .or_else(|| self.workspace.git.changes.first())
+    }
+
+    fn refresh_ghostty_installation(&mut self) {
+        self.ghostty.installation = ghostty::detect_installation();
+        self.ghostty.last_message = self.ghostty.default_message();
+        self.ghostty.busy = false;
+    }
+
+    fn ghostty_request(&self) -> WorkspaceRequest {
+        WorkspaceRequest::new(self.workspace.git.repo_root.as_deref(), &self.workspace.cwd)
+    }
+
+    fn embedded_snapshot(&self) -> EmbeddedGhosttySnapshot {
+        self.embedded_terminal.snapshot()
+    }
+
+    fn launch_ghostty_workspace(&mut self) {
+        if self.ghostty.busy {
+            return;
+        }
+
+        if !self.ghostty.installation.available() {
+            self.ghostty.last_message = self.ghostty.default_message();
+            return;
+        }
+
+        self.ghostty.busy = true;
+        self.ghostty.last_message = format!(
+            "Opening Ghostty at {}...",
+            self.ghostty_request().working_directory.display()
+        );
+
+        let installation = self.ghostty.installation.clone();
+        let request = self.ghostty_request();
+        let tx = self.ghostty_action_tx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(ghostty::focus_or_launch_workspace(&installation, &request));
+        });
     }
 
     fn left_column(&mut self, ui: &mut egui::Ui) {
@@ -320,7 +376,17 @@ impl GhosttyShellApp {
                     }
 
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        tag(ui, &theme, "Ghostty", "latest ghostty-org/ghostty");
+                        let embedded = self.embedded_snapshot();
+                        tag(
+                            ui,
+                            &theme,
+                            "Ghostty",
+                            embedded
+                                .version
+                                .as_deref()
+                                .or(self.ghostty.installation.version.as_deref())
+                                .unwrap_or("not detected"),
+                        );
                         tag(ui, &theme, "Usage", "Live JSONL");
                     });
                 });
@@ -379,7 +445,7 @@ impl GhosttyShellApp {
             });
     }
 
-    fn center_column(&mut self, ui: &mut egui::Ui) {
+    fn center_column(&mut self, ui: &mut egui::Ui, frame: &eframe::Frame) {
         let active_theme = self.active_theme().clone();
         let theme = active_theme.palette.clone();
 
@@ -420,20 +486,167 @@ impl GhosttyShellApp {
 
             ui.add_space(12.0);
 
+            if self.center_mode != CenterMode::Terminal {
+                self.embedded_terminal
+                    .sync(frame, Rect::NOTHING, false, &self.ghostty_request());
+            }
+
             match self.center_mode {
                 CenterMode::Terminal => {
-                    terminal_surface(ui, &self.workspace.git, &theme, &active_theme.name)
+                    self.terminal_surface(ui, frame, &theme, &active_theme.name)
                 }
                 CenterMode::Diff => diff_surface(ui, self.selected_item(), &theme),
                 CenterMode::Preview => preview_surface(ui, self.selected_item(), &theme),
             }
         });
     }
+
+    fn terminal_surface(
+        &mut self,
+        ui: &mut egui::Ui,
+        frame: &eframe::Frame,
+        theme: &ThemePalette,
+        theme_name: &str,
+    ) {
+        if self.embedded_terminal.available() {
+            let request = self.ghostty_request();
+            let snapshot = self.embedded_snapshot();
+            let desired_size = egui::vec2(ui.available_width(), 540.0);
+            let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+
+            ui.painter().rect(
+                rect,
+                CornerRadius::same(18),
+                theme.terminal_bg(),
+                Stroke::new(1.0, theme.strong_border()),
+                egui::StrokeKind::Outside,
+            );
+
+            self.embedded_terminal
+                .sync(frame, rect.shrink(1.0), true, &request);
+
+            ui.add_space(10.0);
+            ui.horizontal_wrapped(|ui| {
+                tag(ui, theme, snapshot.backend_label, theme_name);
+                if let Some(version) = snapshot.version.as_deref() {
+                    tag(ui, theme, "Version", version);
+                }
+                tag(
+                    ui,
+                    theme,
+                    "PWD",
+                    &request.working_directory.display().to_string(),
+                );
+            });
+            ui.label(
+                RichText::new(snapshot.message)
+                    .size(13.0)
+                    .color(theme.muted_text()),
+            );
+            return;
+        }
+
+        let request = self.ghostty_request();
+        let ghostty = self.ghostty.clone();
+
+        Frame::default()
+            .fill(theme.terminal_bg())
+            .stroke(Stroke::new(1.0, theme.strong_border()))
+            .corner_radius(CornerRadius::same(18))
+            .inner_margin(22.0)
+            .show(ui, |ui| {
+                ui.set_min_height(540.0);
+                ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                    ui.add_space(90.0);
+                    ui.label(
+                        RichText::new("GHOSTTY")
+                            .size(28.0)
+                            .strong()
+                            .color(theme.selection_foreground),
+                    );
+                    ui.add_space(14.0);
+                    ui.label(
+                        RichText::new("Real bridge is live. This shell can focus an existing Ghostty repo window or open a new one.")
+                            .size(15.0)
+                            .color(theme.muted_text()),
+                    );
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "{} / {} / theme {}",
+                            ghostty.installation.launch_mode.label(),
+                            ghostty
+                                .installation
+                                .version
+                                .as_deref()
+                                .unwrap_or("version unknown"),
+                            theme_name
+                        ))
+                        .size(13.5)
+                        .color(theme.muted_text()),
+                    );
+                    ui.add_space(10.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "repo {} / cwd {}",
+                            request.repo_root.display(),
+                            request.working_directory.display()
+                        ))
+                        .size(13.0)
+                        .color(theme.muted_text()),
+                    );
+                    ui.add_space(18.0);
+                    ui.horizontal(|ui| {
+                        let open_button = egui::Button::new(
+                            RichText::new(if ghostty.busy {
+                                "Opening..."
+                            } else {
+                                "Open / Focus Repo Window"
+                            })
+                            .size(14.0),
+                        )
+                        .fill(theme.selected_fill())
+                        .stroke(Stroke::new(1.0, theme.strong_border()))
+                        .corner_radius(CornerRadius::same(10));
+
+                        if ui
+                            .add_enabled(
+                                ghostty.installation.available() && !ghostty.busy,
+                                open_button,
+                            )
+                            .clicked()
+                        {
+                            self.launch_ghostty_workspace();
+                        }
+
+                        let rescan_button =
+                            egui::Button::new(RichText::new("Rescan Ghostty").size(14.0))
+                                .fill(theme.card_bg())
+                                .stroke(Stroke::new(1.0, theme.border()))
+                                .corner_radius(CornerRadius::same(10));
+
+                        if ui.add_enabled(!ghostty.busy, rescan_button).clicked() {
+                            self.refresh_ghostty_installation();
+                        }
+                    });
+                    ui.add_space(18.0);
+                    stat_card(
+                        ui,
+                        theme,
+                        "Install",
+                        ghostty.installation.launch_mode.label(),
+                        &ghostty.installation.location_label(),
+                    );
+                    ui.add_space(10.0);
+                    stat_card(ui, theme, "Status", "Last action", &ghostty.last_message);
+                });
+            });
+    }
 }
 
 impl eframe::App for GhosttyShellApp {
     #[allow(deprecated)]
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.drain_updates();
         ui.ctx().request_repaint_after(Duration::from_millis(250));
 
@@ -459,7 +672,7 @@ impl eframe::App for GhosttyShellApp {
                 ui.allocate_ui_with_layout(
                     egui::vec2(center_width, height),
                     Layout::top_down(Align::Min),
-                    |ui| self.center_column(ui),
+                    |ui| self.center_column(ui, frame),
                 );
                 ui.allocate_ui_with_layout(
                     egui::vec2(right_width, height),
@@ -508,6 +721,28 @@ impl WorkspaceSnapshot {
             git,
             usage,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GhosttyPanelState {
+    installation: GhosttyInstallation,
+    last_message: String,
+    busy: bool,
+}
+
+impl GhosttyPanelState {
+    fn new(installation: GhosttyInstallation) -> Self {
+        let last_message = default_ghostty_message(&installation);
+        Self {
+            installation,
+            last_message,
+            busy: false,
+        }
+    }
+
+    fn default_message(&self) -> String {
+        default_ghostty_message(&self.installation)
     }
 }
 
@@ -601,46 +836,6 @@ fn empty_state(ui: &mut egui::Ui, theme: &ThemePalette, title: &str, body: &str)
                     .color(theme.foreground),
             );
             ui.label(RichText::new(body).size(13.5).color(theme.muted_text()));
-        });
-}
-
-fn terminal_surface(ui: &mut egui::Ui, git: &GitSnapshot, theme: &ThemePalette, theme_name: &str) {
-    Frame::default()
-        .fill(theme.terminal_bg())
-        .stroke(Stroke::new(1.0, theme.strong_border()))
-        .corner_radius(CornerRadius::same(18))
-        .inner_margin(22.0)
-        .show(ui, |ui| {
-            ui.set_min_height(540.0);
-            ui.with_layout(Layout::top_down(Align::Center), |ui| {
-                ui.add_space(130.0);
-                ui.label(
-                    RichText::new("GHOSTTY")
-                        .size(28.0)
-                        .strong()
-                        .color(theme.selection_foreground),
-                );
-                ui.add_space(14.0);
-                ui.label(
-                    RichText::new(
-                        "Theme system is live. Ghostty surface wiring targets the latest upstream repo next.",
-                    )
-                    .size(15.0)
-                    .color(theme.muted_text()),
-                );
-                ui.add_space(10.0);
-                ui.label(
-                    RichText::new(format!(
-                        "repo {} / branch {} / files {} / theme {}",
-                        non_empty(&git.repo_name, "none"),
-                        branch_label(git),
-                        git.changes.len(),
-                        theme_name
-                    ))
-                    .size(13.5)
-                    .color(theme.muted_text()),
-                );
-            });
         });
 }
 
@@ -774,6 +969,18 @@ fn non_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
     }
 }
 
+fn default_ghostty_message(installation: &GhosttyInstallation) -> String {
+    if installation.available() {
+        format!(
+            "{} ready at {}.",
+            installation.launch_mode.label(),
+            installation.location_label()
+        )
+    } else {
+        "Ghostty was not detected. Install it or set GHOSTTY_APP/GHOSTTY_BIN.".into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -845,5 +1052,32 @@ mod tests {
     #[test]
     fn center_mode_preview_title() {
         assert_eq!(CenterMode::Preview.title(), "Preview");
+    }
+
+    #[test]
+    fn default_ghostty_message_reports_missing_install() {
+        let install = GhosttyInstallation {
+            app_path: None,
+            binary_path: None,
+            version: None,
+            launch_mode: ghostty::LaunchMode::Missing,
+        };
+
+        assert!(default_ghostty_message(&install).contains("not detected"));
+    }
+
+    #[test]
+    fn default_ghostty_message_reports_ready_install() {
+        let install = GhosttyInstallation {
+            app_path: Some(PathBuf::from("/Applications/Ghostty.app")),
+            binary_path: Some(PathBuf::from(
+                "/Applications/Ghostty.app/Contents/MacOS/ghostty",
+            )),
+            version: Some("Ghostty 1.3.1".into()),
+            launch_mode: ghostty::LaunchMode::AppleScript,
+        };
+
+        assert!(default_ghostty_message(&install).contains("ready"));
+        assert!(default_ghostty_message(&install).contains("/Applications/Ghostty.app"));
     }
 }

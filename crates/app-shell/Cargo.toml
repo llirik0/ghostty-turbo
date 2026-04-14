@@ -2,12 +2,20 @@
 name = "ghostty-shell"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [dependencies]
 eframe = { version = "0.34.1", default-features = true }
+objc2 = { version = "0.5.2", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.2.2", default-features = false, features = ["NSApplication", "NSEvent", "NSPasteboard", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.2.2", default-features = false, features = ["NSArray", "NSGeometry", "NSObject", "NSString"] }
+raw-window-handle = "0.6.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 toml = "0.9.8"
+
+[build-dependencies]
+bindgen = "0.72.1"
 
 [dev-dependencies]
 tempfile = "3.23.0"
