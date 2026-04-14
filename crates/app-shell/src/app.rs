@@ -29,7 +29,11 @@ impl GhosttyShellApp {
 
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let workspace = WorkspaceSnapshot::load(&cwd);
-        let selected_path = workspace.git.changes.first().map(|change| change.path.clone());
+        let selected_path = workspace
+            .git
+            .changes
+            .first()
+            .map(|change| change.path.clone());
 
         Self {
             center_mode: CenterMode::Terminal,
@@ -42,11 +46,24 @@ impl GhosttyShellApp {
     fn drain_updates(&mut self) {
         while let Ok(snapshot) = self.workspace_rx.try_recv() {
             if let Some(path) = self.selected_path.as_deref() {
-                if !snapshot.git.changes.iter().any(|change| change.path == path) {
-                    self.selected_path = snapshot.git.changes.first().map(|change| change.path.clone());
+                if !snapshot
+                    .git
+                    .changes
+                    .iter()
+                    .any(|change| change.path == path)
+                {
+                    self.selected_path = snapshot
+                        .git
+                        .changes
+                        .first()
+                        .map(|change| change.path.clone());
                 }
             } else {
-                self.selected_path = snapshot.git.changes.first().map(|change| change.path.clone());
+                self.selected_path = snapshot
+                    .git
+                    .changes
+                    .first()
+                    .map(|change| change.path.clone());
             }
 
             self.workspace = snapshot;
@@ -54,14 +71,16 @@ impl GhosttyShellApp {
     }
 
     fn selected_item(&self) -> Option<&GitChange> {
-        self.selected_path.as_deref().and_then(|path| {
-            self.workspace
-                .git
-                .changes
-                .iter()
-                .find(|change| change.path == path)
-        })
-        .or_else(|| self.workspace.git.changes.first())
+        self.selected_path
+            .as_deref()
+            .and_then(|path| {
+                self.workspace
+                    .git
+                    .changes
+                    .iter()
+                    .find(|change| change.path == path)
+            })
+            .or_else(|| self.workspace.git.changes.first())
     }
 
     fn left_panel(&mut self, ui: &mut egui::Ui) {
@@ -236,7 +255,10 @@ impl GhosttyShellApp {
             .exact_size(42.0)
             .show_inside(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(format!("repo {}", non_empty(&self.workspace.git.repo_name, "none")));
+                    ui.label(format!(
+                        "repo {}",
+                        non_empty(&self.workspace.git.repo_name, "none")
+                    ));
                     ui.separator();
                     ui.label(format!("branch {}", branch_label(&self.workspace.git)));
                     ui.separator();
@@ -251,7 +273,8 @@ impl GhosttyShellApp {
                     ui.separator();
                     ui.label(format!(
                         "tokens {}",
-                        self.workspace.usage.total_input_tokens + self.workspace.usage.total_output_tokens
+                        self.workspace.usage.total_input_tokens
+                            + self.workspace.usage.total_output_tokens
                     ));
                     ui.separator();
                     ui.label("mode");
@@ -275,7 +298,11 @@ impl GhosttyShellApp {
                             })
                             .stroke(Stroke::new(
                                 1.0,
-                                if selected { Color32::from_rgb(33, 32, 30) } else { border() },
+                                if selected {
+                                    Color32::from_rgb(33, 32, 30)
+                                } else {
+                                    border()
+                                },
                             ))
                             .corner_radius(CornerRadius::same(9));
 
@@ -361,12 +388,14 @@ impl WorkspaceSnapshot {
 fn spawn_workspace_worker(cwd: PathBuf) -> Receiver<WorkspaceSnapshot> {
     let (tx, rx) = mpsc::channel();
 
-    thread::spawn(move || loop {
-        if tx.send(WorkspaceSnapshot::load(&cwd)).is_err() {
-            break;
-        }
+    thread::spawn(move || {
+        loop {
+            if tx.send(WorkspaceSnapshot::load(&cwd)).is_err() {
+                break;
+            }
 
-        thread::sleep(Duration::from_secs(2));
+            thread::sleep(Duration::from_secs(2));
+        }
     });
 
     rx

@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
-    fs,
+    env, fs,
     io::ErrorKind,
     path::{Path, PathBuf},
 };
@@ -78,10 +77,13 @@ pub fn load_snapshot(root_hint: &Path) -> UsageSnapshot {
             }
         };
 
-        let provider = string_field(&value, &["provider", "vendor"]).unwrap_or_else(|| "unknown".into());
-        let model = string_field(&value, &["model", "model_name"]).unwrap_or_else(|| "unknown".into());
+        let provider =
+            string_field(&value, &["provider", "vendor"]).unwrap_or_else(|| "unknown".into());
+        let model =
+            string_field(&value, &["model", "model_name"]).unwrap_or_else(|| "unknown".into());
         let input_tokens = integer_field(&value, &["input_tokens", "prompt_tokens", "input"]);
-        let output_tokens = integer_field(&value, &["output_tokens", "completion_tokens", "output"]);
+        let output_tokens =
+            integer_field(&value, &["output_tokens", "completion_tokens", "output"]);
         let cost_usd = float_field(&value, &["cost_usd", "cost"]);
 
         if let Some(session) = string_field(&value, &["session", "session_id"]) {
@@ -153,13 +155,21 @@ fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
 fn integer_field(value: &Value, keys: &[&str]) -> u64 {
     keys.iter()
         .find_map(|key| value.get(*key))
-        .and_then(|field| field.as_u64().or_else(|| field.as_i64().map(|number| number.max(0) as u64)))
+        .and_then(|field| {
+            field
+                .as_u64()
+                .or_else(|| field.as_i64().map(|number| number.max(0) as u64))
+        })
         .unwrap_or_default()
 }
 
 fn float_field(value: &Value, keys: &[&str]) -> f64 {
     keys.iter()
         .find_map(|key| value.get(*key))
-        .and_then(|field| field.as_f64().or_else(|| field.as_i64().map(|number| number as f64)))
+        .and_then(|field| {
+            field
+                .as_f64()
+                .or_else(|| field.as_i64().map(|number| number as f64))
+        })
         .unwrap_or_default()
 }
