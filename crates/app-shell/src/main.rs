@@ -1,4 +1,6 @@
 mod app;
+mod git;
+mod usage;
 
 fn main() -> eframe::Result {
     let viewport = eframe::egui::ViewportBuilder::default()
@@ -17,4 +19,3 @@ fn main() -> eframe::Result {
         Box::new(|cc| Ok(Box::new(app::GhosttyShellApp::new(cc)))),
     )
 }
-
